@@ -1,7 +1,7 @@
 import flet as ft
 import sqlite3
 from datetime import datetime
-import uuid
+import pyautogui
 import math
 import threading
 import time
@@ -10,7 +10,6 @@ import shutil
 import random
 import sys
 import string
-import pyautogui
 import ctypes
 
 APP_NAME = "Todo APP"
@@ -2237,7 +2236,7 @@ class AgendaApp(ft.Column):
         # Apply the change immediately
         self.apply_translucency()
 
-    def apply_translucency(self):
+    def apply_translucency(self, update_page=True):
         is_mini_view = self.page.app_container.opacity == 0
 
         if is_mini_view and self.translucency_enabled:
@@ -2248,9 +2247,10 @@ class AgendaApp(ft.Column):
             self.page.window.bgcolor = None # Let Flet use the theme's background
             self.page.window.opacity = 1.0
         
-        try:
-            self.page.update() # Update the whole page to apply window changes
-        except: pass
+        if update_page:
+            try:
+                self.page.update() # Update the whole page to apply window changes
+            except: pass
 
     def change_carousel_settings(self):
         show_progress = self.settings_dialog.carousel_show_progress_checkbox.value
@@ -2501,7 +2501,8 @@ class AgendaApp(ft.Column):
             try: self.tabs.update()
             except: pass
 
-# ---- main ----
+
+
 def main(page: ft.Page):
     page.title = "Todo APP"
     page.window.title_bar_hidden = True
@@ -2513,93 +2514,153 @@ def main(page: ft.Page):
     app = AgendaApp(page)
     page.app_instance = app
 
-    # Apply scaling to window and top-level containers
     scale_func = app.scale_func
     page.window.width = scale_func(100)
     page.window.height = scale_func(100)
 
-    # Hide window to prevent flicker during initial positioning
-    page.window.opacity = 0
-    page.update()
+    # --- Posição base da janela ---
+    try:
+        screen_w, _ = pyautogui.size()
+        base_left_small = screen_w - scale_func(100) - 50
+        base_left_large = screen_w - scale_func(650) - 10
+        base_top = 10
+    except:
+        base_left_small = 1000
+        base_left_large = 400
+        base_top = 10
 
-    page.app_container = ft.Container(content=app, expand=True, opacity=0, animate_opacity=None, padding=scale_func(15))
-    
-    # The old mini_icon is now the carousel
+    page.window.left = base_left_small
+    page.window.top = base_top
+
+    # --- Containers principais ---
+    page.app_container = ft.Container(
+        content=app,
+        expand=True,
+        opacity=0,
+        animate_opacity=200,   # fade rápido
+        padding=scale_func(15)
+    )
     page.mini_icon = MiniViewCarousel(app, scale_func)
+    page.mini_icon.visible = False  # começa invisível
+
     stack = ft.Stack(expand=True, controls=[page.app_container, page.mini_icon])
     page.add(stack)
 
     app.load_tabs()
-    # Initial check on startup
     app.check_all_due_dates()
-    # Apply initial translucency
     app.apply_translucency()
-    # The carousel will start automatically via its did_mount method
 
     page.pinned = False
+    page.is_animating = False
+    page.is_picker_open = False # Track if a date picker is open
+    page.is_file_picker_open = False # Track if a file picker is open
 
-    def position_window():
-        try:
-            screen_w, screen_h = pyautogui.size()
-            
-            # Calculate desired position
-            desired_left = screen_w - page.window.width - scale_func(50)
-            desired_top = 10
+    # --- Expandir ---
+    def expand():
+        if page.is_animating: return
+        page.is_animating = True
 
-            # Clamp values to ensure the window is always visible on screen
-            left = max(0, min(desired_left, screen_w - page.window.width))
-            top = max(0, min(desired_top, screen_h - page.window.height))
+        # Fade out window
+        page.window.opacity = 0
+        page.update()
+        time.sleep(0.2)
 
-            page.window.left = left
-            page.window.top = top
-        except Exception as e:
-            print(f"Could not calculate window position: {e}")
-            # Fallback position
-            page.window.left = 10
-            page.window.top = 10
+        # Change layout while invisible
+        page.window.left = base_left_large
+        page.window.width = scale_func(650)
+        page.window.height = scale_func(900)
+        page.app_container.opacity = 1
+        page.mini_icon.visible = False
+        app.apply_translucency(update_page=False) # Make sure window is not transparent
+        page.update()
 
+        # Fade in window
+        page.window.opacity = 1
+        page.update()
+        time.sleep(0.05) # Cooldown
+        page.is_animating = False
+
+
+    # --- Reduzir ---
+    def shrink():
+        if page.is_animating: return
+        page.is_animating = True
+
+        # Fade out window
+        page.window.opacity = 0
+        page.update()
+        time.sleep(0.05)
+
+        # Change layout while invisible
+        page.window.left = base_left_small
+        page.window.width = scale_func(100)
+        page.window.height = scale_func(100)
+        page.app_container.opacity = 0
+        page.mini_icon.visible = True
+        app.apply_translucency(update_page=False) # Apply translucency if enabled
+        page.update()
+
+        # Fade in window
+        page.window.opacity = app.translucency_level / 100.0 if app.translucency_enabled else 1.0
+        page.update()
+        time.sleep(0.05) # Cooldown
+        page.is_animating = False
+
+    # --- Reduzir Inicial (sem animação) ---
+    def initial_shrink():
+        page.window.left = base_left_small
+        page.window.width = scale_func(100)
+        page.window.height = scale_func(100)
+        page.app_container.opacity = 0
+        page.mini_icon.visible = True
+        app.apply_translucency() # This will set window opacity
+        page.update()
+
+    # --- Checagem do mouse ---
     def check_mouse():
         while True:
+            #time.sleep(0.02) # check every 20ms
             try:
-                if page.pinned:
-                    time.sleep(0.1); continue
-                
+                # Don't shrink if pinned, animating, or a picker is open
+                if page.pinned or page.is_animating or page.is_picker_open or page.is_file_picker_open:
+                    continue
+
                 mx, my = pyautogui.position()
                 x0, y0 = page.window.left, page.window.top
                 x1, y1 = x0 + page.window.width, y0 + page.window.height
-                
-                is_inside = x0 <= mx <= x1 and y0 <= my <= y1
-                if getattr(page, "is_picker_open", False) or getattr(page, "is_file_picker_open", False):
-                    is_inside = True
 
-                app_is_visible = page.app_container.opacity == 1
+                is_large_window = page.app_container.opacity == 1
                 
-                # Only act if the state (inside/outside) has changed
-                if is_inside and not app_is_visible:
-                    page.window.width = scale_func(650); page.window.height = scale_func(900)
-                    page.app_container.opacity = 1; page.mini_icon.visible = False
-                    app.apply_translucency() # Make window opaque
-                    position_window(); page.update()
-                elif not is_inside and app_is_visible:
-                    # When mouse leaves, if settings is open, close it
-                    if app.settings_dialog.open:
-                        app.settings_dialog.open = False
+                # Use a circular hitbox for the small window for better feel
+                if not is_large_window:
+                    center_x = x0 + page.window.width / 2
+                    center_y = y0 + page.window.height / 2
+                    radius = page.window.width / 2
+                    inside = math.sqrt((mx - center_x)**2 + (my - center_y)**2) < radius
+                else:
+                    inside = x0 <= mx <= x1 and y0 <= my <= y1
 
-                    page.window.width = scale_func(100); page.window.height = scale_func(100)
-                    page.app_container.opacity = 0; page.mini_icon.visible = True
-                    app.apply_translucency() # Apply translucency settings
-                    position_window(); page.update()
-                
-                time.sleep(0.1)
+                if inside and not is_large_window:
+                    # Use run_threadsafe to prevent UI update crashes from a background thread
+                    if hasattr(page, "run_threadsafe"):
+                        page.run_threadsafe(expand)
+                    else:
+                        expand()
+                elif not inside and is_large_window:
+                    if hasattr(page, "run_threadsafe"):
+                        page.run_threadsafe(shrink)
+                    else:
+                        shrink()
+
             except Exception as e:
-                print(f"Error in mouse checker thread: {e}"); time.sleep(0.5)
+                print(f"Mouse check error: {e}")
 
-    # Position the window for the first time, then make it visible
-    position_window()
-    page.window.opacity = 1
+    initial_shrink()
+    page.window.visible = True
     page.update()
 
     threading.Thread(target=check_mouse, daemon=True).start()
+
 
 if __name__ == "__main__":
     ft.app(target=main)
