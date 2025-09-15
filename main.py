@@ -402,41 +402,76 @@ class TaskRow(ft.Container):
 
         self.file_picker = ft.FilePicker(on_result=self._on_file_picker_result)
 
+        self.start_date_icon = ft.IconButton(
+            icon=ft.Icons.CALENDAR_MONTH,
+            on_click=self._open_start_date_picker,
+            icon_size=self.scale_func(20),
+            opacity=0,
+            animate_opacity=ft.Animation(duration=200)
+        )
         self.start_date_field = ft.TextField(
             value=start_date or "",
             label="Start date",
-            width=self.scale_func(150),
             read_only=True,
             border=ft.InputBorder.UNDERLINE,
-            content_padding=ft.padding.symmetric(vertical=self.scale_func(15), horizontal=self.scale_func(10)),
+            content_padding=ft.padding.only(
+                left=self.scale_func(3), 
+                top=self.scale_func(10), 
+                bottom=self.scale_func(10), 
+                right=self.scale_func(35)
+            ),
             text_style=ft.TextStyle(size=self.scale_func(self.base_font_size)),
-            suffix=ft.IconButton(
-                icon=ft.Icons.CALENDAR_MONTH,
-                on_click=self._open_start_date_picker
-            )
+        )
+        self.start_date_container = ft.Container(
+            content=ft.Stack(
+                [
+                    self.start_date_field,
+                    ft.Container(content=self.start_date_icon, alignment=ft.alignment.center_right)
+                ]
+            ),
+            on_hover=lambda e: self._on_date_field_hover(e, self.start_date_icon),
+            expand=2
+        )
+
+        self.end_date_icon = ft.IconButton(
+            icon=ft.Icons.CALENDAR_MONTH,
+            on_click=self._open_end_date_picker,
+            icon_size=self.scale_func(20),
+            opacity=0,
+            animate_opacity=ft.Animation(duration=200)
         )
         self.end_date_field = ft.TextField(
             value=end_date or "",
             label="End date",
-            width=self.scale_func(150),
             read_only=True,
             border=ft.InputBorder.UNDERLINE,
-            content_padding=ft.padding.symmetric(vertical=self.scale_func(15), horizontal=self.scale_func(10)),
+            content_padding=ft.padding.only(
+                left=self.scale_func(3), 
+                top=self.scale_func(10), 
+                bottom=self.scale_func(10), 
+                right=self.scale_func(35)
+            ),
             text_style=ft.TextStyle(size=self.scale_func(self.base_font_size)),
-            suffix=ft.IconButton(
-                icon=ft.Icons.CALENDAR_MONTH,
-                on_click=self._open_end_date_picker
-            )
+        )
+        self.end_date_container = ft.Container(
+            content=ft.Stack(
+                [
+                    self.end_date_field,
+                    ft.Container(content=self.end_date_icon, alignment=ft.alignment.center_right)
+                ]
+            ),
+            on_hover=lambda e: self._on_date_field_hover(e, self.end_date_icon),
+            expand=2
         )
 
         self.status_field = ft.Dropdown(
             options=[ft.dropdown.Option("Ongoing"), ft.dropdown.Option("Complete")],
             value=status or "Ongoing",
-            width=self.scale_func(150),
+            expand=2,
             border=ft.InputBorder.UNDERLINE,
             border_radius=0,
             text_style=ft.TextStyle(size=self.scale_func(self.base_font_size)),
-            content_padding=ft.padding.symmetric(vertical=self.scale_func(15), horizontal=self.scale_func(10)),
+            content_padding=ft.padding.symmetric(vertical=self.scale_func(10), horizontal=self.scale_func(3)),
             on_change=self._on_status_dropdown_change
         )
 
@@ -447,11 +482,11 @@ class TaskRow(ft.Container):
                 ft.dropdown.Option("Critical")
             ],
             value=priority or "Normal",
-            width=self.scale_func(150),
+            expand=2,
             border=ft.InputBorder.UNDERLINE,
             border_radius=0,
             text_style=ft.TextStyle(size=self.scale_func(self.base_font_size)),
-            content_padding=ft.padding.symmetric(vertical=self.scale_func(15), horizontal=self.scale_func(10)),
+            content_padding=ft.padding.symmetric(vertical=self.scale_func(10), horizontal=self.scale_func(3)),
             on_change=self._on_field_change
         )
 
@@ -493,22 +528,44 @@ class TaskRow(ft.Container):
 
         # Conteúdo expandível da task
         indicators_row = ft.Row([self.change_indicator, self.save_indicator, self.date_error_indicator], spacing=self.scale_func(5))
-        status_row = ft.Row([self.start_date_field, self.end_date_field, ft.Container(expand=True), indicators_row], spacing=self.scale_func(12), vertical_alignment=ft.CrossAxisAlignment.CENTER)
-        priority_status_row = ft.Row([self.priority_field, self.status_field, ft.Container(expand=True), self.attach_btn, self.duplicate_btn, self.save_btn, self.delete_btn], spacing=self.scale_func(5))
+        details_row = ft.Row(
+            [
+                self.start_date_container,
+                self.end_date_container,
+                self.priority_field,
+                self.status_field,
+            ], spacing=self.scale_func(12), vertical_alignment=ft.CrossAxisAlignment.END
+        )
 
-        self.expandable_content = ft.Column([
-            self.task_field,
-            self.checklist_col,
-            ft.Row([self.add_checklist_item_btn]),
-            status_row, 
-            self.date_error_text, 
-            priority_status_row,
-            self.drop_zone,
-            self.attachments_list,
-        ],
-        spacing=self.scale_func(12),
-        animate_opacity=ft.Animation(duration=300, curve=ft.AnimationCurve.EASE_OUT),
-        animate_size=ft.Animation(duration=300, curve=ft.AnimationCurve.EASE_OUT))
+        action_buttons_footer = ft.Container(
+            content=ft.Row(
+                [indicators_row, ft.Container(expand=True), self.attach_btn, self.duplicate_btn, self.save_btn, self.delete_btn],
+                spacing=self.scale_func(5)
+            ),
+            padding=ft.padding.only(top=self.scale_func(10)),
+            border=ft.border.only(top=ft.border.BorderSide(1, ft.Colors.with_opacity(0.2, ft.Colors.ON_SURFACE)))
+        )
+
+        expandable_content_column = ft.Column(
+            [
+                self.task_field,
+                self.checklist_col,
+                ft.Row([self.add_checklist_item_btn]),
+                details_row,
+                self.date_error_text,
+                self.drop_zone,
+                self.attachments_list,
+                action_buttons_footer,
+            ],
+            spacing=self.scale_func(12)
+        )
+
+        self.expandable_content = ft.Container(
+            content=expandable_content_column,
+            animate_opacity=ft.Animation(duration=300, curve=ft.AnimationCurve.EASE_OUT),
+            animate=ft.Animation(duration=250, curve=ft.AnimationCurve.DECELERATE),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE
+        )
         
         # Conteúdo minimizado - apenas informações essenciais
         self.attachment_count = 0
@@ -556,7 +613,6 @@ class TaskRow(ft.Container):
             padding=self.scale_func(20),
             border_radius=self.scale_func(20),
             margin=ft.margin.only(bottom=self.scale_func(10)),
-            animate=ft.Animation(duration=300, curve="ease"),
             ink=True,
             on_click=lambda e: None
         )
@@ -644,6 +700,13 @@ class TaskRow(ft.Container):
 
     def _toggle_minimize(self, e):
         self.set_minimized(not self.is_minimized)
+
+    def _on_date_field_hover(self, e, icon_button):
+        icon_button.opacity = 1 if e.data == "true" else 0
+        try:
+            icon_button.update()
+        except:
+            pass
 
     def set_minimized(self, minimized: bool):
         self.is_minimized = minimized
@@ -794,50 +857,24 @@ class TaskRow(ft.Container):
         self.main_container.update()
 
     def _on_drag_accept(self, e):
-        """Chamado quando um arquivo é solto na task"""
+        """Called when data is dropped on the task. Handles dropped text."""
         self.main_container.border = None
-        self.main_container.update()
-        
-        # Mostrar zona de drop temporariamente
-        self.drop_zone.visible = True
-        self.progress_bar.visible = True
-        self.update()
-        
-        # Simular processamento (já que não temos acesso aos arquivos reais)
-        def process_files():
-            time.sleep(0.5)  # Simular processamento
-            self.progress_bar.visible = False
-            self.drop_zone.visible = False
-            
-            # Simular adição de arquivo
-            if self.db_id:
-                # Em uma implementação real, você processaria os arquivos aqui
-                fake_file_name = f"dropped_file_{random.randint(1000, 9999)}.txt"
-                task_attachment_dir = os.path.join(ATTACHMENTS_DIR, str(self.db_id))
-                if not os.path.exists(task_attachment_dir):
-                    os.makedirs(task_attachment_dir)
-                
-                fake_file_path = os.path.join(task_attachment_dir, fake_file_name)
-                # Criar arquivo simulado
-                with open(fake_file_path, 'w') as f:
-                    f.write("Arquivo simulado adicionado via drag and drop")
-                
-                db.add_attachment(self.db_id, fake_file_path)
-                self._load_attachments()
-                
-                if hasattr(self, 'page') and self.page:
-                    self.page.snack_bar = ft.SnackBar(ft.Text("File attached successfully!"), bgcolor=ft.Colors.GREEN_400)
-                    self.page.snack_bar.open = True
-                    self.page.update()
-            else:
-                if hasattr(self, 'page') and self.page:
-                    self.page.snack_bar = ft.SnackBar(ft.Text("Please save the task before attaching files."), bgcolor=ft.Colors.ORANGE_400)
-                    self.page.snack_bar.open = True
-                    self.page.update()
-            
+
+        # Dropped files are handled by the global page.on_file_drop.
+        # This handler is for dropped text from external applications.
+        # An internal drag would have e.data starting with "flet-draggable-".
+        if e.data and isinstance(e.data, str) and not e.data.startswith("flet-draggable-"):
+            current_task_text = self.task_field.value
+            self.task_field.value = f"{current_task_text}\n{e.data}".strip()
+            if hasattr(self, 'page') and self.page:
+                self.page.snack_bar = ft.SnackBar(ft.Text("Text imported into task description."), bgcolor=ft.Colors.GREEN_400)
+                self.page.snack_bar.open = True
+            self._on_field_change()  # To trigger save indicator
+
+        try:
             self.update()
-        
-        threading.Thread(target=process_files, daemon=True).start()
+        except:
+            pass
 
     def handle_dropped_files(self, files):
         self.drop_zone.visible = True
@@ -854,49 +891,81 @@ class TaskRow(ft.Container):
             self.progress_bar.visible = False
             return
 
-        task_attachment_dir = os.path.join(ATTACHMENTS_DIR, str(self.db_id))
-        if not os.path.exists(task_attachment_dir):
-            os.makedirs(task_attachment_dir)
+        # Separate text files from other attachments
+        text_files = []
+        attachment_files = []
+        for f in files:
+            if f.name.lower().endswith(('.txt', '.md', '.log', '.csv')):
+                text_files.append(f)
+            else:
+                attachment_files.append(f)
 
-        existing_attachments = db.list_attachments(self.db_id)
-        existing_filenames = {os.path.basename(att['file_path']) for att in existing_attachments}
+        # Handle text import
+        if text_files:
+            all_text_content = []
+            for f in text_files:
+                try:
+                    with open(f.path, 'r', encoding='utf-8', errors='ignore') as file:
+                        all_text_content.append(file.read())
+                except Exception as ex:
+                    print(f"Could not read text file {f.name}: {ex}")
+            
+            if all_text_content:
+                current_task_text = self.task_field.value
+                new_text = "\n\n".join(all_text_content)
+                self.task_field.value = f"{current_task_text}\n{new_text}".strip()
+                if hasattr(self, 'page') and self.page:
+                    self.page.snack_bar = ft.SnackBar(ft.Text(f"Text from {len(all_text_content)} file(s) imported into task description."), bgcolor=ft.Colors.GREEN_400)
+                    self.page.snack_bar.open = True
+                    self.page.update()
+                self._on_field_change() # To trigger save indicator
 
-        total_files = len(files)
-        attached_count = 0
-        skipped_files = []
-        for i, f in enumerate(files):
-            try:
-                self.progress_bar.value = (i + 1) / total_files
-                try: self.update()
-                except: pass
-                if f.name in existing_filenames:
-                    skipped_files.append(f.name)
-                    continue
-                dest_path = os.path.join(task_attachment_dir, f.name)
-                shutil.copy(f.path, dest_path)
-                db.add_attachment(self.db_id, dest_path)
-                attached_count += 1
-            except Exception as ex:
-                print("attach error:", ex)
+        # Handle regular attachments
+        if attachment_files:
+            task_attachment_dir = os.path.join(ATTACHMENTS_DIR, str(self.db_id))
+            if not os.path.exists(task_attachment_dir):
+                os.makedirs(task_attachment_dir)
+
+            existing_attachments = db.list_attachments(self.db_id)
+            existing_filenames = {os.path.basename(att['file_path']) for att in existing_attachments}
+
+            total_files = len(attachment_files)
+            attached_count = 0
+            skipped_files = []
+            for i, f in enumerate(attachment_files):
+                try:
+                    self.progress_bar.value = (i + 1) / total_files
+                    try: self.update()
+                    except: pass
+                    if f.name in existing_filenames:
+                        skipped_files.append(f.name)
+                        continue
+                    dest_path = os.path.join(task_attachment_dir, f.name)
+                    shutil.copy(f.path, dest_path)
+                    db.add_attachment(self.db_id, dest_path)
+                    attached_count += 1
+                except Exception as ex:
+                    print("attach error:", ex)
+            
+            if hasattr(self, 'page') and self.page:
+                if skipped_files:
+                    skipped_str = ", ".join(skipped_files)
+                    self.page.snack_bar = ft.SnackBar(ft.Text(f"File(s) already in list: {skipped_str}"), bgcolor=ft.Colors.ORANGE_400)
+                    self.page.snack_bar.open = True
+                    self.page.update()
+                if attached_count > 0:
+                    self.page.snack_bar = ft.SnackBar(ft.Text(f"{attached_count} file(s) attached."), bgcolor=ft.Colors.GREEN_400)
+                    self.page.snack_bar.open = True
+                    self.page.update()
+            if attached_count > 0:
+                self.attachments_changed = True
+                self._on_field_change()
 
         time.sleep(0.1)
         self.progress_bar.visible = False
         self.progress_bar.value = 0
         self.drop_zone.visible = False
         self._load_attachments()
-        if hasattr(self, 'page') and self.page:
-            if skipped_files:
-                skipped_str = ", ".join(skipped_files)
-                self.page.snack_bar = ft.SnackBar(ft.Text(f"File(s) already in list: {skipped_str}"), bgcolor=ft.Colors.ORANGE_400)
-                self.page.snack_bar.open = True
-                self.page.update()
-            if attached_count > 0:
-                self.page.snack_bar = ft.SnackBar(ft.Text(f"{attached_count} file(s) attached."), bgcolor=ft.Colors.GREEN_400)
-                self.page.snack_bar.open = True
-                self.page.update()
-        if attached_count > 0:
-            self.attachments_changed = True
-            self._on_field_change()
 
     def show_drop_zone(self):
         self.drop_zone.visible = True
@@ -1359,13 +1428,15 @@ class AttachFileDialog(ft.AlertDialog):
             self.page.update()
 
 class SettingsDialog(ft.AlertDialog):
-    def __init__(self, on_auto_save_toggle, initial_value, on_close, on_dpi_change, initial_dpi_scale, on_theme_change, initial_theme, scale_func, version, on_font_size_change, initial_font_size):
+    def __init__(self, on_auto_save_toggle, initial_value, on_close, on_dpi_change, initial_dpi_scale, on_theme_change, initial_theme, scale_func, version, on_font_size_change, initial_font_size, on_carousel_interval_change, initial_carousel_interval, on_show_completion_progress_toggle, initial_show_completion_progress):
         super().__init__()
         self.on_auto_save_toggle = on_auto_save_toggle
         self.on_close = on_close
         self.on_dpi_change = on_dpi_change
         self.on_theme_change = on_theme_change
         self.on_font_size_change = on_font_size_change
+        self.on_carousel_interval_change = on_carousel_interval_change
+        self.on_show_completion_progress_toggle = on_show_completion_progress_toggle
         self.scale_func = scale_func
         self.version = version
         self.base_font_size = initial_font_size
@@ -1375,6 +1446,12 @@ class SettingsDialog(ft.AlertDialog):
             label="Auto save changes on tasks",
             value=initial_value,
             on_change=self.on_auto_save_toggle
+        )
+
+        self.show_completion_progress_checkbox = ft.Checkbox(
+            label="Show Progress Bar in Carousel",
+            value=initial_show_completion_progress,
+            on_change=self.on_show_completion_progress_toggle
         )
 
         dpi_options = {
@@ -1419,6 +1496,18 @@ class SettingsDialog(ft.AlertDialog):
             on_change=self.on_font_size_change
         )
 
+        self.carousel_interval_dropdown = ft.Dropdown(
+            label="Minimized Carousel Interval",
+            options=[
+                ft.dropdown.Option(key="3", text="3 seconds"),
+                ft.dropdown.Option(key="5", text="5 seconds"),
+                ft.dropdown.Option(key="10", text="10 seconds"),
+                ft.dropdown.Option(key="15", text="15 seconds"),
+            ],
+            value=str(initial_carousel_interval),
+            on_change=self.on_carousel_interval_change
+        )
+
         self.version_text = ft.Text(
             f"Version {self.version}",
             size=self.scale_func(self.base_font_size - 2),
@@ -1427,8 +1516,8 @@ class SettingsDialog(ft.AlertDialog):
         )
 
         self.content = ft.Column(
-            [self.auto_save_checkbox, self.dpi_dropdown, self.theme_dropdown, self.font_size_dropdown, ft.Divider(height=self.scale_func(20)), ft.Row([ft.Container(expand=True), self.version_text])], 
-            tight=True, spacing=15
+            [self.auto_save_checkbox, self.show_completion_progress_checkbox, self.dpi_dropdown, self.theme_dropdown, self.font_size_dropdown, self.carousel_interval_dropdown, ft.Divider(height=self.scale_func(20)), ft.Row([ft.Container(expand=True), self.version_text])],
+            tight=True, spacing=25
         )
         self.actions = [ft.TextButton("Close", on_click=self.close_dialog)]
         self.actions_alignment = ft.MainAxisAlignment.END
@@ -1847,6 +1936,9 @@ class AgendaTab(ft.Column):
 class AgendaApp(ft.Column):
     def __init__(self, page):
         super().__init__(spacing=12, expand=True)
+        self.last_toggle_time = 0
+        self.anchor_right_edge = 0
+        self.is_maximized = False
         self.page = page
 
         # Get DPI setting, default to "Auto" (0.0) for first run
@@ -1865,6 +1957,8 @@ class AgendaApp(ft.Column):
         self.auto_save_enabled = db.get_setting('auto_save', 'False') == 'True'
         self.theme_name = db.get_setting('theme', 'Dracula')
         self.base_font_size = int(db.get_setting('font_size', '12'))
+        self.carousel_interval = int(db.get_setting('carousel_interval', '5'))
+        self.show_completion_progress = db.get_setting('show_completion_progress', 'True') == 'True'
         self.settings_dialog = SettingsDialog(
             on_auto_save_toggle=self.toggle_auto_save,
             initial_value=self.auto_save_enabled,
@@ -1876,7 +1970,11 @@ class AgendaApp(ft.Column):
             scale_func=self.scale_func,
             version=VERSION,
             on_font_size_change=self.change_font_size,
-            initial_font_size=self.base_font_size
+            initial_font_size=self.base_font_size,
+            on_carousel_interval_change=self.change_carousel_interval,
+            initial_carousel_interval=self.carousel_interval,
+            on_show_completion_progress_toggle=self.toggle_show_completion_progress,
+            initial_show_completion_progress=self.show_completion_progress
         )
         self.delete_dialog = DeleteConfirmationDialog(on_confirm=self.delete_tab, on_cancel=self.close_delete_dialog, scale_func=self.scale_func)
         self.add_tab_btn = ft.ElevatedButton(text="New Tab", icon=ft.Icons.ADD, on_click=self.add_new_tab)
@@ -1892,7 +1990,9 @@ class AgendaApp(ft.Column):
         
         self.controls = [self.header, self.tabs]
         self.apply_theme(self.theme_name)
+        self.notification_checker_thread_stop_event = threading.Event()
         self.start_notification_checker()
+        self.start_carousel_thread()
 
     def change_font_size(self, e):
         """Handles font size changes from the settings dialog."""
@@ -1900,6 +2000,17 @@ class AgendaApp(ft.Column):
         self.base_font_size = new_size
         db.set_setting('font_size', str(new_size))
         self.update_all_font_sizes()
+
+    def change_carousel_interval(self, e):
+        """Handles carousel interval changes from the settings dialog."""
+        new_interval = int(e.control.value)
+        self.carousel_interval = new_interval
+        db.set_setting('carousel_interval', new_interval)
+
+    def toggle_show_completion_progress(self, e):
+        """Handles the toggle for showing completion progress in carousel."""
+        self.show_completion_progress = e.control.value
+        db.set_setting('show_completion_progress', str(self.show_completion_progress))
 
     def update_all_font_sizes(self):
         """Propagates font size changes to all components."""
@@ -1993,6 +2104,112 @@ class AgendaApp(ft.Column):
         self.page.snack_bar.open = True
         self.page.update()
 
+    def stop_notification_checker(self):
+        self.notification_checker_thread_stop_event.set()
+
+    def start_carousel_thread(self):
+        self.carousel_thread_stop_event = threading.Event()
+        self.carousel_thread_pause_event = threading.Event()
+        self.carousel_thread = threading.Thread(target=self._run_minimized_carousel, daemon=True)
+        self.carousel_thread.start()
+
+    def stop_carousel_thread(self):
+        self.carousel_thread_stop_event.set()
+        self.carousel_thread_pause_event.set() # Unblock wait() to allow thread to exit
+
+    def _create_combined_mini_slide(self, tab_name, stats):
+        tab_name_text = ft.Text(
+            tab_name, 
+            size=self.scale_func(14), 
+            weight=ft.FontWeight.BOLD, 
+            text_align=ft.TextAlign.CENTER, 
+            max_lines=1, 
+            overflow=ft.TextOverflow.ELLIPSIS
+        )
+
+        def create_stat(icon, color, value):
+            return ft.Column(
+                [
+                    ft.Icon(icon, color=color, size=self.scale_func(16)),
+                    ft.Text(value, size=self.scale_func(12), weight=ft.FontWeight.BOLD)
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=2
+            )
+        
+        stats_row = ft.Row(
+            [
+                create_stat(ft.Icons.FUNCTIONS, ft.Colors.BLUE, stats.get("total", "0")),
+                create_stat(ft.Icons.LOOP, ft.Colors.ORANGE, stats.get("ongoing", "0")),
+                create_stat(ft.Icons.CHECK_CIRCLE_OUTLINE, ft.Colors.GREEN, stats.get("completed", "0")),
+                create_stat(ft.Icons.ERROR_OUTLINE, ft.Colors.RED, stats.get("overdue", "0")),
+            ],
+            alignment=ft.MainAxisAlignment.SPACE_AROUND,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
+        controls = [
+            tab_name_text,
+        ]
+
+        if self.show_completion_progress:
+            progress_value = stats.get("progress_value", 0)
+            progress_bar = ft.ProgressBar(
+                value=progress_value, 
+                bar_height=self.scale_func(5),
+                width=self.scale_func(80)
+            )
+            controls.append(progress_bar)
+
+        controls.append(stats_row)
+
+        return ft.Column(
+            controls,
+            spacing=8,
+            alignment=ft.MainAxisAlignment.CENTER,
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            expand=True
+        )
+
+    def _run_minimized_carousel(self):
+        while not self.carousel_thread_stop_event.is_set():
+            self.carousel_thread_pause_event.wait() # Blocks when app is maximized
+            
+            if self.carousel_thread_stop_event.is_set(): break
+            if not self.page or not self.tabs.tabs: time.sleep(1); continue
+
+            for tab in self.tabs.tabs:
+                if not self.carousel_thread_pause_event.is_set(): break
+                agenda_tab = tab.content
+                if isinstance(agenda_tab, AgendaTab):
+                    stats = {
+                        "total": agenda_tab.overview_total_tasks.value, 
+                        "ongoing": agenda_tab.overview_ongoing_tasks.value, 
+                        "completed": agenda_tab.overview_completed_tasks.value, 
+                        "overdue": agenda_tab.overview_overdue_tasks.value,
+                        "progress_value": agenda_tab.overview_completion_progress.value,
+                        "progress_percent": agenda_tab.overview_completion_percent.value
+                    }
+                    slide = self._create_combined_mini_slide(tab.tab_content.text, stats)
+                    
+                    if hasattr(self.page, "run_threadsafe"):
+                        self.page.run_threadsafe(self._update_carousel_content, slide)
+                    else:
+                        self._update_carousel_content(slide) # Fallback for older Flet (not thread-safe)
+                
+                time.sleep(self.carousel_interval)
+            time.sleep(0.1)
+
+    def _update_carousel_content(self, new_content):
+        if hasattr(self.page, 'mini_carousel'):
+            self.page.mini_carousel.content = new_content
+            # The update call must be thread-safe. If run_threadsafe is not used,
+            # this call is happening from a background thread, which is risky.
+            # However, individual control updates are sometimes more stable than full page updates.
+            try:
+                self.page.mini_carousel.update()
+            except: pass
+
     def open_settings_dialog(self, e):
         if self.settings_dialog not in self.page.overlay:
             self.page.overlay.append(self.settings_dialog)
@@ -2007,11 +2224,14 @@ class AgendaApp(ft.Column):
         self.notification_checker_thread.start()
 
     def check_due_dates_periodically(self):
-        while True:
-            time.sleep(3600)  # Check every hour
+        # wait returns True if the event is set, False on timeout
+        while not self.notification_checker_thread_stop_event.wait(3600):  # Check every hour
             try:
                 if self.page:
-                    self.page.run_threadsafe(self.check_all_due_dates)
+                    if hasattr(self.page, "run_threadsafe"):
+                        self.page.run_threadsafe(self.check_all_due_dates)
+                    else:
+                        self.check_all_due_dates() # Fallback for older Flet (not thread-safe)
             except Exception as e:
                 print(f"Error in periodic due date checker: {e}")
 
@@ -2040,12 +2260,29 @@ class AgendaApp(ft.Column):
     def toggle_pin(self, e):
         self.page.pinned = self.pin_switch.value
         if self.page.pinned:
-            self.page.window.width = self.scale_func(650)
-            self.page.window.height = self.scale_func(900)
+            self.is_maximized = True
+            # Force maximized state and pause carousel
+            self.carousel_thread_pause_event.clear() # Pause carousel
+            if hasattr(self.page, "run_threadsafe"):
+                self.page.run_threadsafe(self._update_carousel_content, self.page.default_mini_icon)
+            else:
+                self._update_carousel_content(self.page.default_mini_icon)
+
+            new_width = self.scale_func(650)
+            new_height = self.scale_func(900)
+
+            # Set position and size correctly to maintain the anchor
+            self.page.window.left = self.anchor_right_edge - new_width
+            self.page.window.width = new_width
+            self.page.window.height = new_height
+
             self.page.app_container.opacity = 1
-            self.page.mini_icon.visible = False
-            try: self.page.update()
-            except: pass
+            self.page.mini_icon.opacity = 0
+            self.page.mini_icon.disabled = True
+            try:
+                self.page.update()
+            except:
+                pass
 
     def open_delete_dialog_request(self, tab_name):
         if self.delete_dialog not in self.page.overlay:
@@ -2147,19 +2384,30 @@ def main(page: ft.Page):
 
     # Apply scaling to window and top-level containers
     scale_func = app.scale_func
-    page.window.width = scale_func(650)
-    page.window.height = scale_func(900)
+    page.window.width = scale_func(100)
+    page.window.height = scale_func(100)
 
     # Hide window to prevent flicker during initial positioning
     page.window.opacity = 0
     page.update()
 
-    page.app_container = ft.Container(content=app, expand=True, opacity=1, animate_opacity=ft.Animation(duration=300, curve=ft.AnimationCurve.EASE_OUT), padding=scale_func(15))
+    page.app_container = ft.Container(content=app, expand=True, opacity=0, animate_opacity=ft.Animation(duration=200, curve=ft.AnimationCurve.EASE_OUT), padding=scale_func(15))
+    
+    page.default_mini_icon = ft.Icon(ft.Icons.EVENT_NOTE, size=scale_func(60), color=ft.Colors.BLUE)
+    page.mini_carousel = ft.AnimatedSwitcher(
+        content=page.default_mini_icon,
+        transition=ft.AnimatedSwitcherTransition.FADE,
+        duration=500,
+        reverse_duration=500,
+    )
     page.mini_icon = ft.Container(
+        content=page.mini_carousel,
         width=scale_func(100), height=scale_func(100), 
         alignment=ft.alignment.center, 
-        content=ft.Icon(ft.Icons.EVENT_NOTE, size=scale_func(60), color=ft.Colors.BLUE), 
-        visible=False)
+        opacity=1,
+        animate_opacity=ft.Animation(duration=200, curve=ft.AnimationCurve.EASE_OUT),
+        disabled=False
+    )
     stack = ft.Stack(expand=True, controls=[page.app_container, page.mini_icon])
     page.add(stack)
 
@@ -2169,12 +2417,21 @@ def main(page: ft.Page):
 
     page.pinned = False
 
+    mouse_checker_stop_event = threading.Event()
+
+    def on_disconnect(e):
+        app.stop_carousel_thread()
+        app.stop_notification_checker()
+        mouse_checker_stop_event.set()
+
+    page.on_disconnect = on_disconnect
+
     def position_window():
         try:
             screen_w, screen_h = pyautogui.size()
             
             # Calculate desired position
-            desired_left = screen_w - page.window.width - scale_func(50)
+            desired_left = screen_w - page.window.width - scale_func(80)
             desired_top = 10
 
             # Clamp values to ensure the window is always visible on screen
@@ -2189,42 +2446,78 @@ def main(page: ft.Page):
             page.window.left = 10
             page.window.top = 10
 
-    def check_mouse():
-        while True:
+    def check_mouse(stop_event):
+        while not stop_event.is_set():
             try:
                 if page.pinned:
-                    time.sleep(0.1); continue
+                    if stop_event.wait(0.1): break
+                    continue
                 
                 mx, my = pyautogui.position()
                 x0, y0 = page.window.left, page.window.top
                 x1, y1 = x0 + page.window.width, y0 + page.window.height
-                
+
                 is_inside = x0 <= mx <= x1 and y0 <= my <= y1
+
                 if getattr(page, "is_picker_open", False) or getattr(page, "is_file_picker_open", False):
                     is_inside = True
 
-                app_is_visible = page.app_container.opacity == 1
+                app_is_visible = app.is_maximized
                 
                 # Only act if the state (inside/outside) has changed
                 if is_inside and not app_is_visible:
-                    page.window.width = scale_func(650); page.window.height = scale_func(900)
-                    page.app_container.opacity = 1; page.mini_icon.visible = False
-                    position_window(); page.update()
+                    # MAXIMIZE: Anchor to top-right corner
+                    app.last_toggle_time = time.time()
+                    app.is_maximized = True
+                    app.carousel_thread_pause_event.clear() # Pause carousel
+                    if hasattr(page, "run_threadsafe"):
+                        page.run_threadsafe(app._update_carousel_content, page.default_mini_icon)
+                    else:
+                        app._update_carousel_content(page.default_mini_icon) # Fallback for older Flet (not thread-safe)
+                    
+                    new_width = scale_func(650)
+                    new_height = scale_func(900)
+
+                    # Calculate new 'left' from fixed anchor to keep right edge stationary
+                    page.window.left = app.anchor_right_edge - new_width
+                    page.window.width = new_width
+                    page.window.height = new_height
+
+                    page.app_container.opacity = 1; page.mini_icon.opacity = 0; page.mini_icon.disabled = True
+                    page.update()
                 elif not is_inside and app_is_visible:
-                    page.window.width = scale_func(100); page.window.height = scale_func(100)
-                    page.app_container.opacity = 0; page.mini_icon.visible = True
-                    position_window(); page.update()
+                    # MINIMIZE: Anchor to top-right corner, with a cooldown to prevent flickering
+                    if time.time() - app.last_toggle_time > 0.5:
+                        app.is_maximized = False
+                        app.last_toggle_time = time.time()
+
+                        if app.settings_dialog.open:
+                            app.settings_dialog.open = False
+
+                        new_width = scale_func(100)
+                        new_height = scale_func(100)
+
+                        # Calculate new 'left' from fixed anchor to keep right edge stationary
+                        page.window.left = app.anchor_right_edge - new_width
+                        page.window.width = new_width
+                        page.window.height = new_height
+
+                        page.app_container.opacity = 0; page.mini_icon.opacity = 1; page.mini_icon.disabled = False
+                        page.update()
+                        app.carousel_thread_pause_event.set() # Resume carousel
                 
-                time.sleep(0.1)
+                if stop_event.wait(0.1): break
             except Exception as e:
-                print(f"Error in mouse checker thread: {e}"); time.sleep(0.5)
+                print(f"Error in mouse checker thread: {e}")
+                if stop_event.wait(0.5): break
 
     # Position the window for the first time, then make it visible
     position_window()
+    app.anchor_right_edge = page.window.left + page.window.width
     page.window.opacity = 1
     page.update()
 
-    threading.Thread(target=check_mouse, daemon=True).start()
+    threading.Thread(target=check_mouse, args=(mouse_checker_stop_event,), daemon=True).start()
 
 if __name__ == "__main__":
     ft.app(target=main)
