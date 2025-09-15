@@ -7,14 +7,55 @@ import time
 import os
 import shutil
 import random
+import sys
 import string
 import pyautogui
+import ctypes
+
+APP_NAME = "Todo APP"
+# On Windows, this will be C:\Users\<user>\AppData\Roaming\Todo APP
+APP_DATA_DIR = os.path.join(os.getenv('APPDATA'), APP_NAME)
+DB_PATH = os.path.join(APP_DATA_DIR, 'agenda.db')
+ATTACHMENTS_DIR = os.path.join(APP_DATA_DIR, 'attachments')
+
+def get_auto_dpi_scale(base_dpi=96):
+    """
+    Calculates the UI scale factor based on the screen's DPI.
+    Uses ctypes on Windows to avoid tkinter dependency issues in executables.
+    """
+    try:
+        if sys.platform == "win32":
+            # Set process DPI awareness to System Aware (1)
+            # This is crucial for getting the correct DPI value in scaled displays.
+            try:
+                ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            except (AttributeError, OSError):
+                # Fallback for older Windows versions
+                ctypes.windll.user32.SetProcessDPIAware()
+            
+            # Get DPI
+            LOGPIXELSX = 88  # Horizontal DPI
+            hDC = ctypes.windll.user32.GetDC(0)
+            dpi = ctypes.windll.gdi32.GetDeviceCaps(hDC, LOGPIXELSX)
+            ctypes.windll.user32.ReleaseDC(0, hDC)
+            return dpi / base_dpi
+        else: # Fallback for other OS (macOS, Linux)
+            import tkinter as tk
+            root = tk.Tk()
+            root.withdraw()
+            dpi = root.winfo_fpixels('1i')
+            root.destroy()
+            return dpi / base_dpi
+    except Exception as e:
+        print(f"Could not determine screen DPI, falling back to 1.0. Error: {e}")
+        return 1.0
 
 # ---- simple DB shim (igual ao seu) ----
 class db:
     @staticmethod
     def init_db():
-        conn = sqlite3.connect('agenda.db')
+        os.makedirs(APP_DATA_DIR, exist_ok=True)
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("""CREATE TABLE IF NOT EXISTS tabs
                          (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE)""")
@@ -36,12 +77,11 @@ class db:
                          (key TEXT PRIMARY KEY, value TEXT)""")
         conn.commit()
         conn.close()
-        if not os.path.exists('attachments'):
-            os.makedirs('attachments')
+        os.makedirs(ATTACHMENTS_DIR, exist_ok=True)
 
     @staticmethod
     def add_tab(name):
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("INSERT OR IGNORE INTO tabs (name) VALUES (?)", (name,))
         conn.commit()
@@ -49,7 +89,7 @@ class db:
 
     @staticmethod
     def list_tabs():
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("SELECT name FROM tabs")
         tabs = [row[0] for row in c.fetchall()]
@@ -58,7 +98,7 @@ class db:
 
     @staticmethod
     def update_tab_name(old_name, new_name):
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("UPDATE tabs SET name = ? WHERE name = ?", (new_name, old_name))
         c.execute("UPDATE tasks SET tab_name = ? WHERE tab_name = ?", (new_name, old_name))
@@ -67,7 +107,7 @@ class db:
 
     @staticmethod
     def add_task(tab_name, title, task, start_date, end_date, status, priority):
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("INSERT INTO tasks (tab_name, title, task, start_date, end_date, status, priority) VALUES (?, ?, ?, ?, ?, ?, ?)",
                   (tab_name, title, task, start_date, end_date, status, priority))
@@ -78,7 +118,7 @@ class db:
 
     @staticmethod
     def list_tasks(tab_name):
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("SELECT id, title, task, start_date, end_date, status, priority FROM tasks WHERE tab_name = ?", (tab_name,))
         tasks = []
@@ -97,7 +137,7 @@ class db:
 
     @staticmethod
     def update_task(task_id, title, task, start_date, end_date, status, priority, tab_name):
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("UPDATE tasks SET title = ?, task = ?, start_date = ?, end_date = ?, status = ?, priority = ?, tab_name = ? WHERE id = ?",
                   (title, task, start_date, end_date, status, priority, tab_name, task_id))
@@ -106,11 +146,11 @@ class db:
 
     @staticmethod
     def delete_task(task_id):
-        task_attachment_dir = os.path.join('attachments', str(task_id))
+        task_attachment_dir = os.path.join(ATTACHMENTS_DIR, str(task_id))
         if os.path.exists(task_attachment_dir):
             shutil.rmtree(task_attachment_dir)
 
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("DELETE FROM attachments WHERE task_id = ?", (task_id,))
         c.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
@@ -119,7 +159,7 @@ class db:
 
     @staticmethod
     def delete_tab(tab_name):
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("SELECT id FROM tasks WHERE tab_name = ?", (tab_name,))
         task_ids = [row[0] for row in c.fetchall()]
@@ -131,7 +171,7 @@ class db:
 
     @staticmethod
     def add_attachment(task_id, file_path):
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("INSERT INTO attachments (task_id, file_path) VALUES (?, ?)", (task_id, file_path))
         conn.commit()
@@ -139,7 +179,7 @@ class db:
 
     @staticmethod
     def list_attachments(task_id):
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("SELECT id, file_path FROM attachments WHERE task_id = ?", (task_id,))
         attachments = [{"id": row[0], "file_path": row[1]} for row in c.fetchall()]
@@ -148,7 +188,7 @@ class db:
 
     @staticmethod
     def get_attachment(attachment_id):
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("SELECT file_path FROM attachments WHERE id = ?", (attachment_id,))
         result = c.fetchone()
@@ -160,7 +200,7 @@ class db:
         file_path = db.get_attachment(attachment_id)
         if file_path and os.path.exists(file_path):
             os.remove(file_path)
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("DELETE FROM attachments WHERE id = ?", (attachment_id,))
         conn.commit()
@@ -168,7 +208,7 @@ class db:
 
     @staticmethod
     def get_setting(key, default=None):
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("SELECT value FROM settings WHERE key = ?", (key,))
         result = c.fetchone()
@@ -179,7 +219,7 @@ class db:
 
     @staticmethod
     def set_setting(key, value):
-        conn = sqlite3.connect('agenda.db')
+        conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
         conn.commit()
@@ -520,7 +560,7 @@ class TaskRow(ft.Container):
             if self.db_id:
                 # Em uma implementação real, você processaria os arquivos aqui
                 fake_file_name = f"dropped_file_{random.randint(1000, 9999)}.txt"
-                task_attachment_dir = os.path.join('attachments', str(self.db_id))
+                task_attachment_dir = os.path.join(ATTACHMENTS_DIR, str(self.db_id))
                 if not os.path.exists(task_attachment_dir):
                     os.makedirs(task_attachment_dir)
                 
@@ -561,7 +601,7 @@ class TaskRow(ft.Container):
             self.progress_bar.visible = False
             return
 
-        task_attachment_dir = os.path.join('attachments', str(self.db_id))
+        task_attachment_dir = os.path.join(ATTACHMENTS_DIR, str(self.db_id))
         if not os.path.exists(task_attachment_dir):
             os.makedirs(task_attachment_dir)
 
@@ -1055,12 +1095,21 @@ class SettingsDialog(ft.AlertDialog):
         )
 
         dpi_options = {
-            "75%": "0.75",
+            "Auto (Recommended)": "0.0",
+            "50%": "0.5",
+            "60%": "0.6",
+            "70%": "0.7",
+            "80%": "0.8",
+            "90%": "0.9",
             "100%": "1.0",
-            "125%": "1.25",
+            "110%": "1.1",
+            "120%": "1.2",
+            "130%": "1.3",
+            "140%": "1.4",
             "150%": "1.5",
         }
-        initial_dpi_value = str(initial_dpi_scale)
+        # The value from the DB is already a string (e.g., "0.0", "1.0")
+        initial_dpi_value = initial_dpi_scale
 
         self.dpi_dropdown = ft.Dropdown(
             label="Display Scaling (requires restart)",
@@ -1304,18 +1353,27 @@ class AgendaApp(ft.Column):
     def __init__(self, page):
         super().__init__(spacing=12, expand=True)
         self.page = page
-        
-        self.dpi_scale = float(db.get_setting('dpi_scale', '1.0'))
+
+        # Get DPI setting, default to "Auto" (0.0) for first run
+        self.dpi_scale_setting = db.get_setting('dpi_scale', '0.0')
+
+        if float(self.dpi_scale_setting) == 0.0:
+            # If "Auto", calculate scale based on screen DPI
+            self.dpi_scale = get_auto_dpi_scale()
+        else:
+            # Otherwise, use the fixed value
+            self.dpi_scale = float(self.dpi_scale_setting)
+
         self.scale = lambda value: int(value * self.dpi_scale)
 
         self.tabs = ft.Tabs(selected_index=0, scrollable=True, expand=True)
         self.auto_save_enabled = db.get_setting('auto_save', 'False') == 'True'
         self.settings_dialog = SettingsDialog(
-            on_auto_save_toggle=self.toggle_auto_save, 
-            initial_value=self.auto_save_enabled, 
+            on_auto_save_toggle=self.toggle_auto_save,
+            initial_value=self.auto_save_enabled,
             on_close=self.close_settings_dialog,
             on_dpi_change=self.change_dpi,
-            initial_dpi_scale=self.dpi_scale
+            initial_dpi_scale=self.dpi_scale_setting
         )
         self.delete_dialog = DeleteConfirmationDialog(on_confirm=self.delete_tab, on_cancel=self.close_delete_dialog, scale=self.scale)
         self.add_tab_btn = ft.ElevatedButton(text="New Tab", icon=ft.Icons.ADD, on_click=self.add_new_tab)
@@ -1323,7 +1381,7 @@ class AgendaApp(ft.Column):
         self.settings_btn = ft.IconButton(icon=ft.Icons.SETTINGS, tooltip="Settings", on_click=self.open_settings_dialog)
         self.pin_switch = ft.Switch(value=False, on_change=self.toggle_pin, tooltip="Pin window open")
         self.header = ft.Row([
-            ft.Text("📒 TODO", style=ft.TextThemeStyle.HEADLINE_SMALL), 
+            ft.Text("📝 Todo APP", style=ft.TextThemeStyle.HEADLINE_SMALL),
             ft.Container(expand=True), 
             self.settings_btn, 
             self.pin_switch, self.add_tab_btn
@@ -1341,7 +1399,9 @@ class AgendaApp(ft.Column):
 
     def change_dpi(self, new_scale):
         db.set_setting('dpi_scale', new_scale)
-        self.page.snack_bar = ft.SnackBar(ft.Text("Display scaling updated. Please restart the app."), bgcolor=ft.Colors.BLUE)
+
+        # Show a message that a restart is required
+        self.page.snack_bar = ft.SnackBar(ft.Text("Please restart the application to apply the new scaling."), bgcolor=ft.Colors.BLUE)
         self.page.snack_bar.open = True
         self.page.update()
 
@@ -1394,7 +1454,10 @@ class AgendaApp(ft.Column):
     def toggle_pin(self, e):
         self.page.pinned = self.pin_switch.value
         if self.page.pinned:
-            self.page.window.width = 650; self.page.window.height = 900; self.page.app_container.opacity = 1; self.page.mini_icon.visible = False
+            self.page.window.width = self.scale(650)
+            self.page.window.height = self.scale(900)
+            self.page.app_container.opacity = 1
+            self.page.mini_icon.visible = False
             try: self.page.update()
             except: pass
 
@@ -1501,6 +1564,10 @@ def main(page: ft.Page):
     page.window.width = scale(650)
     page.window.height = scale(900)
 
+    # Hide window to prevent flicker during initial positioning
+    page.window.opacity = 0
+    page.update()
+
     page.app_container = ft.Container(content=app, expand=True, opacity=1, animate_opacity=ft.Animation(0), padding=scale(15))
     page.mini_icon = ft.Container(
         width=scale(100), height=scale(100), 
@@ -1519,39 +1586,59 @@ def main(page: ft.Page):
     def position_window():
         try:
             screen_w, screen_h = pyautogui.size()
-            page.window.left = screen_w - page.window.width - 50
+            
+            # Calculate desired position
+            desired_left = screen_w - page.window.width - scale(50)
+            desired_top = 10
+
+            # Clamp values to ensure the window is always visible on screen
+            left = max(0, min(desired_left, screen_w - page.window.width))
+            top = max(0, min(desired_top, screen_h - page.window.height))
+
+            page.window.left = left
+            page.window.top = top
+        except Exception as e:
+            print(f"Could not calculate window position: {e}")
+            # Fallback position
+            page.window.left = 10
             page.window.top = 10
-            try: page.update()
-            except: pass
-        except Exception:
-            pass
 
     def check_mouse():
         while True:
             try:
                 if page.pinned:
                     time.sleep(0.1); continue
+                
                 mx, my = pyautogui.position()
                 x0, y0 = page.window.left, page.window.top
                 x1, y1 = x0 + page.window.width, y0 + page.window.height
-                entered = x0 <= mx <= x1 and y0 <= my <= y1
+                
+                is_inside = x0 <= mx <= x1 and y0 <= my <= y1
                 if getattr(page, "is_picker_open", False) or getattr(page, "is_file_picker_open", False):
-                    entered = True
-                if entered:
-                    page.window.width = scale(650); page.window.height = scale(900); page.app_container.opacity = 1; page.mini_icon.visible = False
-                else:
-                    page.window.width = scale(100); page.window.height = scale(100); page.app_container.opacity = 0; page.mini_icon.visible = True
-                position_window()
-                try: page.update()
-                except: pass
-                time.sleep(0.05)
-            except Exception:
+                    is_inside = True
+
+                app_is_visible = page.app_container.opacity == 1
+                
+                # Only act if the state (inside/outside) has changed
+                if is_inside and not app_is_visible:
+                    page.window.width = scale(650); page.window.height = scale(900)
+                    page.app_container.opacity = 1; page.mini_icon.visible = False
+                    position_window(); page.update()
+                elif not is_inside and app_is_visible:
+                    page.window.width = scale(100); page.window.height = scale(100)
+                    page.app_container.opacity = 0; page.mini_icon.visible = True
+                    position_window(); page.update()
+                
                 time.sleep(0.1)
+            except Exception as e:
+                print(f"Error in mouse checker thread: {e}"); time.sleep(0.5)
+
+    # Position the window for the first time, then make it visible
+    position_window()
+    page.window.opacity = 1
+    page.update()
 
     threading.Thread(target=check_mouse, daemon=True).start()
-    position_window()
-    try: page.update()
-    except: pass
 
 if __name__ == "__main__":
     ft.app(target=main)

@@ -1,0 +1,1 @@
+pyinstaller --onefile --windowed --icon="list.ico" --name "TODO" main.py 
