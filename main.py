@@ -467,7 +467,7 @@ class TaskRow(ft.Container):
         self.status_field = ft.Dropdown(
             label="Status",
             options=[ft.dropdown.Option("Ongoing"), ft.dropdown.Option("Complete")],
-            value=status,
+            value=status or "Ongoing",
             expand=2,
             border=ft.InputBorder.UNDERLINE,
             border_radius=0,
@@ -483,7 +483,7 @@ class TaskRow(ft.Container):
                 ft.dropdown.Option("Normal"),
                 ft.dropdown.Option("Critical")
             ],
-            value=priority,
+            value=priority or "Normal",
             expand=2,
             border=ft.InputBorder.UNDERLINE,
             border_radius=0,
@@ -1439,7 +1439,7 @@ class AttachFileDialog(ft.AlertDialog):
             self.page.update()
 
 class SettingsDialog(ft.AlertDialog):
-    def __init__(self, on_auto_save_toggle, initial_value, on_close, on_dpi_change, initial_dpi_scale, on_theme_change, initial_theme, scale_func, version, on_font_size_change, initial_font_size, on_carousel_settings_change, initial_carousel_show_progress, initial_carousel_speed):
+    def __init__(self, on_auto_save_toggle, initial_value, on_close, on_dpi_change, initial_dpi_scale, on_theme_change, initial_theme, scale_func, version, on_font_size_change, initial_font_size, on_carousel_settings_change, initial_carousel_show_progress, initial_carousel_speed, on_translucency_change, initial_translucency_enabled, initial_translucency_level):
         super().__init__()
         self.on_auto_save_toggle = on_auto_save_toggle
         self.on_close = on_close
@@ -1447,6 +1447,7 @@ class SettingsDialog(ft.AlertDialog):
         self.on_theme_change = on_theme_change
         self.on_font_size_change = on_font_size_change
         self.on_carousel_settings_change = on_carousel_settings_change
+        self.on_translucency_change = on_translucency_change
         self.scale_func = scale_func
         self.version = version
         self.base_font_size = initial_font_size
@@ -1517,6 +1518,22 @@ class SettingsDialog(ft.AlertDialog):
             expand=True
         )
 
+        self.translucency_enabled_checkbox = ft.Checkbox(
+            label="Enable mini-view translucency",
+            value=initial_translucency_enabled,
+            on_change=self._handle_translucency_change
+        )
+
+        self.translucency_slider = ft.Slider(
+            min=20,
+            max=100,
+            divisions=8,
+            value=initial_translucency_level,
+            label="{value}% opacity",
+            on_change_end=self._handle_translucency_change,
+            disabled=not initial_translucency_enabled
+        )
+
         self.version_text = ft.Text(
             f"Version {self.version}",
             size=self.scale_func(self.base_font_size - 2),
@@ -1531,6 +1548,10 @@ class SettingsDialog(ft.AlertDialog):
                 ft.Text("Mini-view Carousel", weight=ft.FontWeight.BOLD),
                 self.carousel_show_progress_checkbox,
                 self.carousel_speed_dropdown,
+                ft.Divider(),
+                ft.Text("Mini-view Appearance", weight=ft.FontWeight.BOLD),
+                self.translucency_enabled_checkbox,
+                self.translucency_slider,
                 ft.Divider(height=self.scale_func(20)), 
                 ft.Row([ft.Container(expand=True), self.version_text])
             ],
@@ -1547,6 +1568,16 @@ class SettingsDialog(ft.AlertDialog):
 
     def _handle_dpi_change(self, e):
         self.on_dpi_change(float(e.control.value))
+
+    def _handle_translucency_change(self, e):
+        # When checkbox is toggled, enable/disable slider
+        is_enabled = self.translucency_enabled_checkbox.value
+        self.translucency_slider.disabled = not is_enabled
+        try:
+            self.update()
+        except:
+            pass
+        self.on_translucency_change()
 
     def _handle_carousel_setting_change(self, e):
         self.on_carousel_settings_change()
@@ -1950,21 +1981,21 @@ class AgendaTab(ft.Column):
             **(data or {})
         )
         row.set_reorder_mode(self.reorder_mode_active)
-        self.add_row_to_list(row, row.status_field.value)
+        
+        target_list = self.ongoing_list if row.status_field.value == "Ongoing" else self.complete_list
+        target_list.controls.insert(0, row)
+
         self.update_overview_stats()
         self.update_arrow_states()
         # Don't auto-save duplicated tasks, let the caller handle it
         if (self.get_auto_save_setting and self.get_auto_save_setting()) and not data:
             row.save()
-        try: self.update()
-        except: pass
+        # Update the entire tab to ensure the new row is rendered.
+        try:
+            self.page.update()
+        except:
+            pass
         return row
-
-    def add_row_to_list(self, row, status):
-        if status == "Ongoing":
-            self.ongoing_list.controls.insert(0, row)
-        else:
-            self.complete_list.controls.insert(0, row)
 
     def on_move_task_up(self, task_row):
         self._move_task(task_row, -1)
@@ -2012,12 +2043,30 @@ class AgendaTab(ft.Column):
         # Save the new task to get a db_id and persist it
         new_row.save()
 
-        # Now, duplicate checklist items
+        # Now, duplicate checklist items and attachments if the original and new tasks have IDs
         if original_task_row.db_id and new_row.db_id:
+            # Duplicate checklist items
             original_checklist_items = db.list_checklist_items(original_task_row.db_id)
             for item in original_checklist_items:
                 db.add_checklist_item(new_row.db_id, item['text'], item['is_checked'])
             new_row._load_checklist()
+
+            # Duplicate attachments
+            original_attachments = db.list_attachments(original_task_row.db_id)
+            if original_attachments:
+                new_task_attachment_dir = os.path.join(ATTACHMENTS_DIR, str(new_row.db_id))
+                os.makedirs(new_task_attachment_dir, exist_ok=True)
+                for att in original_attachments:
+                    source_path = att['file_path']
+                    if os.path.exists(source_path):
+                        file_name = os.path.basename(source_path)
+                        dest_path = os.path.join(new_task_attachment_dir, file_name)
+                        try:
+                            shutil.copy(source_path, dest_path)
+                            db.add_attachment(new_row.db_id, dest_path)
+                        except Exception as e:
+                            print(f"Error copying attachment during duplication: {e}")
+                new_row._load_attachments()
 
         try:
             new_row.scroll_to(duration=500)
@@ -2026,25 +2075,34 @@ class AgendaTab(ft.Column):
 
     def on_save_task(self, row, data):
         is_new_task = not row.db_id
-        status_changed = is_new_task or (row.original_data.get("status") != data.get("status"))
 
-        if row.db_id:
-            db.update_task(row.db_id, data["title"], data["task"], data["start_date"], data["end_date"], data["status"], data["priority"], self.tab_name)
-        else:
+        # Save or update the task in the database
+        if is_new_task:
             row.db_id = db.add_task(self.tab_name, data["title"], data["task"], data["start_date"], data["end_date"], data["status"], data["priority"])
+        else:
+            db.update_task(row.db_id, data["title"], data["task"], data["start_date"], data["end_date"], data["status"], data["priority"], self.tab_name)
+
+        # If it was a new task, update its UI now that it has a database ID
         if is_new_task and row.db_id:
             row.attach_btn.disabled = False
             row.duplicate_btn.disabled = False
             row.display_id_text.value = f"#{row.db_id}"
             row.display_id_text.visible = True
-            row._update_minimized_info()
-            row._load_attachments()
-            row._load_checklist()
             try: row.update()
             except: pass
-        # Apenas move a tarefa se for nova ou se o status mudou
-        if status_changed:
+
+        # Check if the task is in the correct list ("Ongoing" vs "Complete") and move it if necessary.
+        # This handles both existing tasks with a status change and new tasks that might have had their status changed before the first save.
+        is_in_ongoing = row in self.ongoing_list.controls
+        should_be_in_ongoing = data["status"] == "Ongoing"
+
+        if (should_be_in_ongoing and not is_in_ongoing) or (not should_be_in_ongoing and is_in_ongoing):
             self.move_task(row)
+        else:
+            # If no move is needed, just update the overview stats and the tab UI.
+            self.update_overview_stats()
+            try: self.update()
+            except: pass
 
     def on_delete_task(self, row):
         self.task_to_delete = row
@@ -2067,27 +2125,39 @@ class AgendaTab(ft.Column):
         self.delete_task_dialog.open = False
         self.update_overview_stats()
         self.update_arrow_states()
-        try: self.update()
+        try: self.page.update()
         except: pass
 
     def cancel_delete_task(self):
         self.task_to_delete = None
         self.delete_task_dialog.open = False
-        try: self.update()
+        try: self.page.update()
         except: pass
 
     def move_task(self, row):
-        # remove any existing occurrence
-        for lst in (self.ongoing_list, self.complete_list):
-            if row in lst.controls:
-                try: lst.controls.remove(row)
-                except: pass
-        # reinsert according to current status
-        self.add_row_to_list(row, row.status_field.value)
+        # Determine source and target lists
+        source_list = self.complete_list if row.status_field.value == "Ongoing" else self.ongoing_list
+        target_list = self.ongoing_list if row.status_field.value == "Ongoing" else self.complete_list
+
+        # Remove from the source list
+        if row in source_list.controls:
+            try:
+                source_list.controls.remove(row)
+            except ValueError:
+                pass
+
+        # Add to the top of the target list
+        target_list.controls.insert(0, row)
+
         self.update_overview_stats()
         self.update_arrow_states()
-        try: self.update()
-        except: pass
+        
+        # Update both lists involved in the move
+        try:
+            source_list.update()
+            target_list.update()
+        except Exception:
+            pass
 
     def on_task_status_change(self, row):
         self.move_task(row)
@@ -2117,6 +2187,8 @@ class AgendaApp(ft.Column):
         self.base_font_size = int(db.get_setting('font_size', '12'))
         self.carousel_show_progress = db.get_setting('carousel_show_progress', 'True') == 'True'
         self.carousel_speed = int(db.get_setting('carousel_speed', '5'))
+        self.translucency_enabled = db.get_setting('translucency_enabled', 'False') == 'True'
+        self.translucency_level = int(db.get_setting('translucency_level', '80'))
         self.settings_dialog = SettingsDialog(
             on_auto_save_toggle=self.toggle_auto_save,
             initial_value=self.auto_save_enabled,
@@ -2131,7 +2203,10 @@ class AgendaApp(ft.Column):
             initial_font_size=self.base_font_size,
             on_carousel_settings_change=self.change_carousel_settings,
             initial_carousel_show_progress=self.carousel_show_progress,
-            initial_carousel_speed=self.carousel_speed
+            initial_carousel_speed=self.carousel_speed,
+            on_translucency_change=self.change_translucency_settings,
+            initial_translucency_enabled=self.translucency_enabled,
+            initial_translucency_level=self.translucency_level
         )
         self.delete_dialog = DeleteConfirmationDialog(on_confirm=self.delete_tab, on_cancel=self.close_delete_dialog, scale_func=self.scale_func)
         self.add_tab_btn = ft.ElevatedButton(text="New Tab", icon=ft.Icons.ADD, on_click=self.add_new_tab)
@@ -2148,6 +2223,34 @@ class AgendaApp(ft.Column):
         self.controls = [self.header, self.tabs]
         self.apply_theme(self.theme_name)
         self.start_notification_checker()
+
+    def change_translucency_settings(self):
+        is_enabled = self.settings_dialog.translucency_enabled_checkbox.value
+        level = self.settings_dialog.translucency_slider.value
+
+        db.set_setting('translucency_enabled', str(is_enabled))
+        db.set_setting('translucency_level', str(int(level)))
+
+        self.translucency_enabled = is_enabled
+        self.translucency_level = int(level)
+
+        # Apply the change immediately
+        self.apply_translucency()
+
+    def apply_translucency(self):
+        is_mini_view = self.page.app_container.opacity == 0
+
+        if is_mini_view and self.translucency_enabled:
+            self.page.window.bgcolor = ft.Colors.TRANSPARENT
+            self.page.window.opacity = self.translucency_level / 100.0
+        else:
+            # Full view, or mini-view without translucency, should be opaque
+            self.page.window.bgcolor = None # Let Flet use the theme's background
+            self.page.window.opacity = 1.0
+        
+        try:
+            self.page.update() # Update the whole page to apply window changes
+        except: pass
 
     def change_carousel_settings(self):
         show_progress = self.settings_dialog.carousel_show_progress_checkbox.value
@@ -2419,7 +2522,7 @@ def main(page: ft.Page):
     page.window.opacity = 0
     page.update()
 
-    page.app_container = ft.Container(content=app, expand=True, opacity=0, animate_opacity=ft.Animation(duration=100, curve=ft.AnimationCurve.EASE_OUT), padding=scale_func(15))
+    page.app_container = ft.Container(content=app, expand=True, opacity=0, animate_opacity=None, padding=scale_func(15))
     
     # The old mini_icon is now the carousel
     page.mini_icon = MiniViewCarousel(app, scale_func)
@@ -2429,6 +2532,8 @@ def main(page: ft.Page):
     app.load_tabs()
     # Initial check on startup
     app.check_all_due_dates()
+    # Apply initial translucency
+    app.apply_translucency()
     # The carousel will start automatically via its did_mount method
 
     page.pinned = False
@@ -2473,6 +2578,7 @@ def main(page: ft.Page):
                 if is_inside and not app_is_visible:
                     page.window.width = scale_func(650); page.window.height = scale_func(900)
                     page.app_container.opacity = 1; page.mini_icon.visible = False
+                    app.apply_translucency() # Make window opaque
                     position_window(); page.update()
                 elif not is_inside and app_is_visible:
                     # When mouse leaves, if settings is open, close it
@@ -2481,6 +2587,7 @@ def main(page: ft.Page):
 
                     page.window.width = scale_func(100); page.window.height = scale_func(100)
                     page.app_container.opacity = 0; page.mini_icon.visible = True
+                    app.apply_translucency() # Apply translucency settings
                     position_window(); page.update()
                 
                 time.sleep(0.1)
