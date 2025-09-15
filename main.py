@@ -100,6 +100,12 @@ class db:
                           task_id INTEGER, 
                           file_path TEXT,
                           FOREIGN KEY(task_id) REFERENCES tasks(id))""")
+        c.execute("""CREATE TABLE IF NOT EXISTS checklist_items
+                         (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                          task_id INTEGER,
+                          text TEXT,
+                          is_checked INTEGER,
+                          FOREIGN KEY(task_id) REFERENCES tasks(id))""")
         c.execute("""CREATE TABLE IF NOT EXISTS settings
                          (key TEXT PRIMARY KEY, value TEXT)""")
         conn.commit()
@@ -180,6 +186,7 @@ class db:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("DELETE FROM attachments WHERE task_id = ?", (task_id,))
+        c.execute("DELETE FROM checklist_items WHERE task_id = ?", (task_id,))
         c.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
         conn.commit()
         conn.close()
@@ -234,6 +241,41 @@ class db:
         conn.close()
 
     @staticmethod
+    def list_checklist_items(task_id):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT id, text, is_checked FROM checklist_items WHERE task_id = ?", (task_id,))
+        items = [{"id": row[0], "text": row[1], "is_checked": bool(row[2])} for row in c.fetchall()]
+        conn.close()
+        return items
+
+    @staticmethod
+    def add_checklist_item(task_id, text, is_checked):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("INSERT INTO checklist_items (task_id, text, is_checked) VALUES (?, ?, ?)", (task_id, text, int(is_checked)))
+        item_id = c.lastrowid
+        conn.commit()
+        conn.close()
+        return item_id
+
+    @staticmethod
+    def update_checklist_item(item_id, text, is_checked):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("UPDATE checklist_items SET text = ?, is_checked = ? WHERE id = ?", (text, int(is_checked), item_id))
+        conn.commit()
+        conn.close()
+
+    @staticmethod
+    def delete_checklist_item(item_id):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("DELETE FROM checklist_items WHERE id = ?", (item_id,))
+        conn.commit()
+        conn.close()
+
+    @staticmethod
     def get_setting(key, default=None):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
@@ -273,6 +315,7 @@ class TaskRow(ft.Container):
         self.on_move_down = on_move_down
         self.has_date_error = False
         self.attachments_changed = False
+        self.checklist_changed = False
         self.notification_status = None
         self.get_auto_save_setting = get_auto_save_setting
         self.auto_save_timer = None
@@ -319,6 +362,9 @@ class TaskRow(ft.Container):
             content_padding=ft.padding.symmetric(vertical=self.scale_func(20), horizontal=self.scale_func(10)),
             on_change=self._on_field_change
         )
+
+        self.checklist_col = ft.Column(spacing=self.scale_func(5))
+        self.add_checklist_item_btn = ft.IconButton(icon=ft.Icons.ADD, on_click=self._add_checklist_item_ui, tooltip="Add checklist item")
 
         self.attachments_list = ft.Column(spacing=self.scale_func(5))
         self.progress_bar = ft.ProgressBar(visible=False, height=self.scale_func(10))
@@ -451,12 +497,14 @@ class TaskRow(ft.Container):
         priority_status_row = ft.Row([self.priority_field, self.status_field, ft.Container(expand=True), self.attach_btn, self.duplicate_btn, self.save_btn, self.delete_btn], spacing=self.scale_func(5))
 
         self.expandable_content = ft.Column([
-            self.task_field, 
-            self.drop_zone, 
-            self.attachments_list, 
+            self.task_field,
+            self.checklist_col,
+            ft.Row([self.add_checklist_item_btn]),
             status_row, 
             self.date_error_text, 
-            priority_status_row
+            priority_status_row,
+            self.drop_zone,
+            self.attachments_list,
         ],
         spacing=self.scale_func(12),
         animate_opacity=ft.Animation(duration=300, curve=ft.AnimationCurve.EASE_OUT),
@@ -528,6 +576,7 @@ class TaskRow(ft.Container):
 
         if self.db_id:
             self._load_attachments()
+        self._load_checklist()
         self._on_status_change()
         self._validate_dates()
         self._update_minimized_info()
@@ -577,6 +626,13 @@ class TaskRow(ft.Container):
         self.minimized_due_date_info.controls[1].size = self.scale_func(self.base_font_size)
         self.minimized_priority_info.controls[1].size = self.scale_func(self.base_font_size)
         # Attachments list fonts are updated on _load_attachments
+        for item_row in self.checklist_col.controls:
+            if isinstance(item_row, ft.Row) and len(item_row.controls) > 1:
+                textfield = item_row.controls[1]
+                if isinstance(textfield, ft.TextField):
+                    textfield.text_style.size = self.scale_func(self.base_font_size)
+        try: self.update()
+        except: pass
 
     def _move_up(self, e):
         if self.on_move_up:
@@ -609,6 +665,72 @@ class TaskRow(ft.Container):
             self.update()
         except:
             pass
+
+    def _create_checklist_item_row(self, item_id=None, text="", is_checked=False):
+        item_row = ft.Row(
+            data=item_id, # Store the DB id here
+            controls=[
+                ft.Checkbox(value=is_checked, on_change=self._on_checklist_change),
+                ft.TextField(
+                    value=text,
+                    expand=True,
+                    border=ft.InputBorder.UNDERLINE,
+                    text_style=ft.TextStyle(size=self.scale_func(self.base_font_size)),
+                    on_change=self._on_checklist_change
+                ),
+                ft.IconButton(
+                    icon=ft.Icons.REMOVE,
+                    icon_size=16,
+                    on_click=self._delete_checklist_item_ui
+                )
+            ]
+        )
+        return item_row
+
+    def _on_checklist_change(self, e=None):
+        self.checklist_changed = True
+        self._on_field_change()
+
+    def _delete_checklist_item_ui(self, e):
+        item_row = e.control.parent
+        item_id = item_row.data
+        if item_id:
+            db.delete_checklist_item(item_id)
+        self.checklist_col.controls.remove(item_row)
+        self._on_checklist_change()
+        try: self.update()
+        except: pass
+
+    def _add_checklist_item_ui(self, e=None):
+        if not self.db_id:
+            if hasattr(self, 'page') and self.page:
+                self.page.snack_bar = ft.SnackBar(ft.Text("Please save the task before adding checklist items."), bgcolor=ft.Colors.ORANGE_400)
+                self.page.snack_bar.open = True
+                self.page.update()
+            return
+        new_item_row = self._create_checklist_item_row()
+        self.checklist_col.controls.append(new_item_row)
+        self._on_checklist_change()
+        try: self.update()
+        except: pass
+
+    def _load_checklist(self):
+        self.checklist_col.controls.clear()
+        if not self.db_id: return
+        items = db.list_checklist_items(self.db_id)
+        for item in items:
+            item_row = self._create_checklist_item_row(item['id'], item['text'], item['is_checked'])
+            self.checklist_col.controls.append(item_row)
+        try: self.update()
+        except: pass
+
+    def _save_checklist(self):
+        if not self.checklist_changed or not self.db_id: return
+        for item_row in self.checklist_col.controls:
+            item_id, is_checked, text = item_row.data, item_row.controls[0].value, item_row.controls[1].value
+            if item_id: db.update_checklist_item(item_id, text, is_checked)
+            else: item_row.data = db.add_checklist_item(self.db_id, text, is_checked)
+        self.checklist_changed = False
 
     def set_reorder_mode(self, active: bool):
         self.reorder_arrows_col.width = self.scale_func(40) if active else 0
@@ -836,7 +958,7 @@ class TaskRow(ft.Container):
         if self._validate_dates() and self._has_data_changed():
             self._show_change_indicator()
         self._update_minimized_info()
-
+        
         if self.get_auto_save_setting and self.get_auto_save_setting() and self._has_data_changed() and not self.has_date_error:
             self.auto_save_timer = threading.Timer(1.5, self.save)
             self.auto_save_timer.start()
@@ -852,7 +974,7 @@ class TaskRow(ft.Container):
         for k, v in current_data.items():
             if str(v) != str(self.original_data.get(k, "")):
                 return True
-        return self.attachments_changed
+        return self.attachments_changed or self.checklist_changed
 
     def _show_change_indicator(self):
         self.has_changes = True
@@ -882,6 +1004,7 @@ class TaskRow(ft.Container):
 
     def _update_original_data(self):
         self.original_data = self.get_data().copy()
+        self.checklist_changed = False
 
     def _load_attachments(self):
         self.attachments_list.controls.clear()
@@ -1111,10 +1234,12 @@ class TaskRow(ft.Container):
                 self.page.snack_bar.open = True
                 self.page.update()
             return
+        self._save_checklist()
         self.on_save(self, self.get_data())
         self._update_original_data()
         self.attachments_changed = False
         self._show_save_indicator()
+        
         if hasattr(self.page, 'app_instance'):
             self.page.app_instance.check_all_due_dates()
 
@@ -1637,6 +1762,13 @@ class AgendaTab(ft.Column):
         # Save the new task to get a db_id and persist it
         new_row.save()
 
+        # Now, duplicate checklist items
+        if original_task_row.db_id and new_row.db_id:
+            original_checklist_items = db.list_checklist_items(original_task_row.db_id)
+            for item in original_checklist_items:
+                db.add_checklist_item(new_row.db_id, item['text'], item['is_checked'])
+            new_row._load_checklist()
+
         try:
             new_row.scroll_to(duration=500)
         except:
@@ -1657,6 +1789,7 @@ class AgendaTab(ft.Column):
             row.display_id_text.visible = True
             row._update_minimized_info()
             row._load_attachments()
+            row._load_checklist()
             try: row.update()
             except: pass
         # Apenas move a tarefa se for nova ou se o status mudou
