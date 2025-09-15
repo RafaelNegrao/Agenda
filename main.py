@@ -2,6 +2,7 @@ import flet as ft
 import sqlite3
 from datetime import datetime
 import uuid
+import math
 import threading
 import time
 import os
@@ -13,10 +14,36 @@ import pyautogui
 import ctypes
 
 APP_NAME = "Todo APP"
+VERSION = "1.1.0"
 # On Windows, this will be C:\Users\<user>\AppData\Roaming\Todo APP
 APP_DATA_DIR = os.path.join(os.getenv('APPDATA'), APP_NAME)
 DB_PATH = os.path.join(APP_DATA_DIR, 'agenda.db')
 ATTACHMENTS_DIR = os.path.join(APP_DATA_DIR, 'attachments')
+
+DRACULA_THEME = ft.Theme(
+    color_scheme=ft.ColorScheme(
+        background="#312447",
+        on_background="#f8f8f2",
+        surface="#282a36",
+        on_surface="#f8f8f2",
+        surface_variant="#483f61",  # Cor de fundo das tarefas (mais clara)
+        on_surface_variant="#f8f8f2",
+        primary="#bd93f9",  # Roxo
+        on_primary="#000000",
+        secondary="#ff79c9",  # Rosa
+        on_secondary="#000000",
+        error="#ff5555",  # Vermelho
+        on_error="#000000",
+        outline="#6272a4",
+    ),
+    page_transitions=ft.PageTransitionsTheme(
+        android=ft.PageTransitionTheme.NONE,
+        ios=ft.PageTransitionTheme.NONE,
+        linux=ft.PageTransitionTheme.NONE,
+        macos=ft.PageTransitionTheme.NONE,
+        windows=ft.PageTransitionTheme.NONE,
+    ), # Remove a animação de transição de página padrão
+)
 
 def get_auto_dpi_scale(base_dpi=96):
     """
@@ -232,9 +259,11 @@ class TaskRow(ft.Container):
         7: "Jul", 8: "Aug", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dec"
     }
 
-    def __init__(self, on_save, on_delete, on_move_up, on_move_down, title=None, task=None, start_date=None, end_date=None, status=None, priority=None, db_id=None, get_auto_save_setting=None, scale=None):
+    def __init__(self, on_save, on_delete, on_duplicate, on_move_up, on_move_down, title=None, task=None, start_date=None, end_date=None, status=None, priority=None, db_id=None, get_auto_save_setting=None, scale=None, base_font_size=12):
+        self.base_font_size = base_font_size
         self.on_save = on_save
         self.on_delete = on_delete
+        self.on_duplicate = on_duplicate
         self.db_id = db_id
         self.is_minimized = False
 
@@ -244,10 +273,10 @@ class TaskRow(ft.Container):
         self.on_move_down = on_move_down
         self.has_date_error = False
         self.attachments_changed = False
-        self.original_bgcolor = "#2C2F48"
+        self.notification_status = None
         self.get_auto_save_setting = get_auto_save_setting
         self.auto_save_timer = None
-        self.scale = scale if scale else lambda x: x # Fallback for safety
+        self.scale_func = scale if scale else lambda x: x # Fallback for safety
 
         self.original_data = {
             "title": title or "",
@@ -258,10 +287,12 @@ class TaskRow(ft.Container):
             "priority": priority or "Normal"
         }
 
+        self.original_bgcolor = None # Será definido com base no tema
+
         self.display_id_text = ft.Text(
             f"#{db_id}" if db_id else "",
-            size=self.scale(30),
-            color=ft.Colors.GREY_500,
+            size=self.scale_func(30),
+            color=ft.Colors.ON_SURFACE_VARIANT,
             weight=ft.FontWeight.BOLD,
             visible=db_id is not None
         )
@@ -271,9 +302,10 @@ class TaskRow(ft.Container):
             label="Title",
             expand=True,
             border=ft.InputBorder.UNDERLINE,
-            text_style=ft.TextStyle(size=self.scale(16), weight=ft.FontWeight.BOLD),
-            content_padding=ft.padding.symmetric(vertical=self.scale(15), horizontal=self.scale(10)),
-            on_change=self._on_field_change
+            text_style=ft.TextStyle(size=self.scale_func(16), weight=ft.FontWeight.BOLD),
+            content_padding=ft.padding.symmetric(vertical=self.scale_func(15), horizontal=self.scale_func(10)),
+            on_change=self._on_field_change,
+            capitalization=ft.TextCapitalization.CHARACTERS
         )
 
         self.task_field = ft.TextField(
@@ -283,13 +315,13 @@ class TaskRow(ft.Container):
             min_lines=2,
             max_lines=6,
             expand=True,
-            text_style=ft.TextStyle(size=self.scale(12)),
-            content_padding=ft.padding.symmetric(vertical=self.scale(20), horizontal=self.scale(10)),
+            text_style=ft.TextStyle(size=self.scale_func(self.base_font_size)),
+            content_padding=ft.padding.symmetric(vertical=self.scale_func(20), horizontal=self.scale_func(10)),
             on_change=self._on_field_change
         )
 
-        self.attachments_list = ft.Column(spacing=self.scale(5))
-        self.progress_bar = ft.ProgressBar(visible=False, height=self.scale(10))
+        self.attachments_list = ft.Column(spacing=self.scale_func(5))
+        self.progress_bar = ft.ProgressBar(visible=False, height=self.scale_func(10))
 
         self.drop_zone = ft.Container(
             content=ft.Column(
@@ -304,9 +336,9 @@ class TaskRow(ft.Container):
             alignment=ft.alignment.center,
             border=ft.border.all(color=ft.Colors.PRIMARY, width=2),
             border_radius=10,
-            padding=self.scale(20),
+            padding=self.scale_func(20),
             visible=False,
-            margin=ft.margin.symmetric(vertical=self.scale(10)),
+            margin=ft.margin.symmetric(vertical=self.scale_func(10)),
         )
 
         self.start_date_picker = ft.DatePicker(
@@ -327,11 +359,11 @@ class TaskRow(ft.Container):
         self.start_date_field = ft.TextField(
             value=start_date or "",
             label="Start date",
-            width=self.scale(150),
+            width=self.scale_func(150),
             read_only=True,
             border=ft.InputBorder.UNDERLINE,
-            content_padding=ft.padding.symmetric(vertical=self.scale(15), horizontal=self.scale(10)),
-            text_style=ft.TextStyle(size=self.scale(12)),
+            content_padding=ft.padding.symmetric(vertical=self.scale_func(15), horizontal=self.scale_func(10)),
+            text_style=ft.TextStyle(size=self.scale_func(self.base_font_size)),
             suffix=ft.IconButton(
                 icon=ft.Icons.CALENDAR_MONTH,
                 on_click=self._open_start_date_picker
@@ -340,11 +372,11 @@ class TaskRow(ft.Container):
         self.end_date_field = ft.TextField(
             value=end_date or "",
             label="End date",
-            width=self.scale(150),
+            width=self.scale_func(150),
             read_only=True,
             border=ft.InputBorder.UNDERLINE,
-            content_padding=ft.padding.symmetric(vertical=self.scale(15), horizontal=self.scale(10)),
-            text_style=ft.TextStyle(size=self.scale(12)),
+            content_padding=ft.padding.symmetric(vertical=self.scale_func(15), horizontal=self.scale_func(10)),
+            text_style=ft.TextStyle(size=self.scale_func(self.base_font_size)),
             suffix=ft.IconButton(
                 icon=ft.Icons.CALENDAR_MONTH,
                 on_click=self._open_end_date_picker
@@ -354,11 +386,11 @@ class TaskRow(ft.Container):
         self.status_field = ft.Dropdown(
             options=[ft.dropdown.Option("Ongoing"), ft.dropdown.Option("Complete")],
             value=status or "Ongoing",
-            width=self.scale(150),
+            width=self.scale_func(150),
             border=ft.InputBorder.UNDERLINE,
             border_radius=0,
-            text_style=ft.TextStyle(size=self.scale(12)),
-            content_padding=ft.padding.symmetric(vertical=self.scale(15), horizontal=self.scale(10)),
+            text_style=ft.TextStyle(size=self.scale_func(self.base_font_size)),
+            content_padding=ft.padding.symmetric(vertical=self.scale_func(15), horizontal=self.scale_func(10)),
             on_change=self._on_status_dropdown_change
         )
 
@@ -369,32 +401,42 @@ class TaskRow(ft.Container):
                 ft.dropdown.Option("Critical")
             ],
             value=priority or "Normal",
-            width=self.scale(150),
+            width=self.scale_func(150),
             border=ft.InputBorder.UNDERLINE,
             border_radius=0,
-            text_style=ft.TextStyle(size=self.scale(12)),
-            content_padding=ft.padding.symmetric(vertical=self.scale(15), horizontal=self.scale(10)),
+            text_style=ft.TextStyle(size=self.scale_func(self.base_font_size)),
+            content_padding=ft.padding.symmetric(vertical=self.scale_func(15), horizontal=self.scale_func(10)),
             on_change=self._on_field_change
         )
 
-        self.change_indicator = ft.Icon(ft.Icons.EDIT, color=ft.Colors.ORANGE, size=self.scale(20), visible=False)
-        self.save_indicator = ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=self.scale(20), visible=False)
-        self.date_error_indicator = ft.Icon(ft.Icons.ERROR, color=ft.Colors.RED, size=self.scale(20), visible=False)
+        self.change_indicator = ft.Icon(ft.Icons.EDIT, color=ft.Colors.ORANGE, size=self.scale_func(20), visible=False)
+        self.save_indicator = ft.Icon(ft.Icons.CHECK_CIRCLE, color=ft.Colors.GREEN, size=self.scale_func(20), visible=False)
+        self.date_error_indicator = ft.Icon(ft.Icons.ERROR, color=ft.Colors.ERROR, size=self.scale_func(20), visible=False)
 
-        self.date_error_text = ft.Text("Start date cannot be after end date", color=ft.Colors.RED, size=self.scale(12), visible=False)
+        self.date_error_text = ft.Text("Start date cannot be after end date", color=ft.Colors.ERROR, size=self.scale_func(self.base_font_size), visible=False)
 
         self.save_btn = ft.IconButton(icon=ft.Icons.SAVE, tooltip="Save", on_click=self.save)
         self.delete_btn = ft.IconButton(icon=ft.Icons.DELETE, tooltip="Delete", on_click=self.delete)
+        self.duplicate_btn = ft.IconButton(icon=ft.Icons.CONTENT_COPY, tooltip="Duplicate", on_click=self.duplicate, disabled=self.db_id is None)
         self.attach_btn = ft.IconButton(icon=ft.Icons.ATTACH_FILE, tooltip="Attach files", on_click=self._attach_file, disabled=self.db_id is None)
-        self.move_up_btn = ft.IconButton(icon=ft.Icons.ARROW_UPWARD, on_click=self._move_up, visible=False, tooltip="Move up")
-        self.move_down_btn = ft.IconButton(icon=ft.Icons.ARROW_DOWNWARD, on_click=self._move_down, visible=False, tooltip="Move down")
+        self.move_up_btn = ft.IconButton(icon=ft.Icons.ARROW_UPWARD, on_click=self._move_up, tooltip="Move up")
+        self.move_down_btn = ft.IconButton(icon=ft.Icons.ARROW_DOWNWARD, on_click=self._move_down, tooltip="Move down")
         self.minimize_btn = ft.IconButton(
-            icon=ft.Icons.KEYBOARD_ARROW_UP, 
-            tooltip="Minimize", 
-            on_click=self._toggle_minimize
+            icon=ft.Icons.KEYBOARD_ARROW_UP,
+            tooltip="Minimize",
+            on_click=self._toggle_minimize,
+            rotate=ft.Rotate(0),
+            animate_rotation=ft.Animation(duration=300, curve=ft.AnimationCurve.EASE_IN_OUT)
         )
 
-        self.reorder_arrows_col = ft.Column([self.move_up_btn, self.move_down_btn], spacing=0)
+        self.reorder_arrows_col = ft.Container(
+            content=ft.Column(
+                [self.move_up_btn, self.move_down_btn], 
+                spacing=0),
+            width=0,
+            animate=ft.Animation(duration=300, curve=ft.AnimationCurve.EASE_OUT),
+            clip_behavior=ft.ClipBehavior.HARD_EDGE
+        )
 
         # Cabeçalho da task com botão de minimizar
         self.task_header = ft.Row([
@@ -404,9 +446,9 @@ class TaskRow(ft.Container):
         ], spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
         # Conteúdo expandível da task
-        indicators_row = ft.Row([self.change_indicator, self.save_indicator, self.date_error_indicator], spacing=self.scale(5))
-        status_row = ft.Row([self.start_date_field, self.end_date_field], spacing=self.scale(12))
-        priority_status_row = ft.Row([self.priority_field, self.status_field, ft.Container(expand=True), indicators_row, self.attach_btn, self.save_btn, self.delete_btn], spacing=self.scale(12))
+        indicators_row = ft.Row([self.change_indicator, self.save_indicator, self.date_error_indicator], spacing=self.scale_func(5))
+        status_row = ft.Row([self.start_date_field, self.end_date_field, ft.Container(expand=True), indicators_row], spacing=self.scale_func(12), vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        priority_status_row = ft.Row([self.priority_field, self.status_field, ft.Container(expand=True), self.attach_btn, self.duplicate_btn, self.save_btn, self.delete_btn], spacing=self.scale_func(5))
 
         self.expandable_content = ft.Column([
             self.task_field, 
@@ -415,33 +457,47 @@ class TaskRow(ft.Container):
             status_row, 
             self.date_error_text, 
             priority_status_row
-        ], spacing=self.scale(12))
-
+        ],
+        spacing=self.scale_func(12),
+        animate_opacity=ft.Animation(duration=300, curve=ft.AnimationCurve.EASE_OUT),
+        animate_size=ft.Animation(duration=300, curve=ft.AnimationCurve.EASE_OUT))
+        
         # Conteúdo minimizado - apenas informações essenciais
         self.attachment_count = 0
-        self.minimized_dates_text = ft.Text("", size=self.scale(12), color=ft.Colors.GREY_400)
-        self.minimized_attachments_text = ft.Text("", size=self.scale(12), color=ft.Colors.BLUE_400)
+        self.minimized_dates_text = ft.Text("", size=self.scale_func(self.base_font_size), color=ft.Colors.ON_SURFACE_VARIANT)
+        self.minimized_attachments_text = ft.Text("", size=self.scale_func(self.base_font_size + 2), color=ft.Colors.PRIMARY)
         self.minimized_due_date_info = ft.Row(
             [
-                ft.Icon(ft.Icons.ALARM, size=self.scale(12)),
-                ft.Text("", size=self.scale(12), weight=ft.FontWeight.BOLD)
+                ft.Icon(ft.Icons.ALARM, size=self.scale_func(12)),
+                ft.Text("", size=self.scale_func(self.base_font_size), weight=ft.FontWeight.BOLD)
             ],
             visible=False,
-            spacing=self.scale(4),
+            spacing=self.scale_func(4),
             alignment=ft.MainAxisAlignment.CENTER,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER
+        )
+        self.minimized_priority_info = ft.Row(
+            [
+                ft.Icon(size=self.scale_func(14)),
+                ft.Text("", size=self.scale_func(self.base_font_size), weight=ft.FontWeight.BOLD)
+            ],
+            visible=False,
+            spacing=self.scale_func(4),
             vertical_alignment=ft.CrossAxisAlignment.CENTER
         )
         self.minimized_info = ft.Row([
             self.minimized_dates_text,
             self.minimized_attachments_text,
             self.minimized_due_date_info,
-        ], spacing=self.scale(10), vertical_alignment=ft.CrossAxisAlignment.CENTER)
+            self.minimized_priority_info,
+            ft.Container(expand=True),
+        ], spacing=self.scale_func(15), vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
         self.task_main_content = ft.Column([
             self.task_header,
             self.expandable_content,
             self.minimized_info
-        ], spacing=self.scale(12), expand=True)
+        ], spacing=self.scale_func(12), expand=True)
 
         # Container principal da task
         self.main_container = ft.Container(
@@ -449,10 +505,12 @@ class TaskRow(ft.Container):
                 [self.reorder_arrows_col, self.task_main_content],
                 vertical_alignment=ft.CrossAxisAlignment.START
             ),
-            padding=self.scale(20),
-            bgcolor=self.original_bgcolor,
-            border_radius=self.scale(20),
-            margin=ft.margin.only(bottom=self.scale(10))
+            padding=self.scale_func(20),
+            border_radius=self.scale_func(20),
+            margin=ft.margin.only(bottom=self.scale_func(10)),
+            animate=ft.Animation(duration=300, curve="ease"),
+            ink=True,
+            on_click=lambda e: None
         )
 
         # Wrap in a file drop target
@@ -463,7 +521,9 @@ class TaskRow(ft.Container):
                 on_will_accept=self._on_drag_will_accept,
                 on_accept=self._on_drag_accept,
                 on_leave=self._on_drag_leave,
-            )
+            ),
+            opacity=0,
+            animate_opacity=ft.Animation(duration=400, curve="ease_in")
         )
 
         if self.db_id:
@@ -472,6 +532,51 @@ class TaskRow(ft.Container):
         self._validate_dates()
         self._update_minimized_info()
         self.set_minimized(True)
+
+    def update_theme_colors(self):
+        if not self.page or not self.page.app_instance:
+            return
+
+        # Fallback for older Flet versions that don't have `effective_theme`
+        current_theme = None
+        if hasattr(self.page, 'effective_theme') and self.page.effective_theme:
+            current_theme = self.page.effective_theme
+        else:
+            current_theme = self.page.dark_theme if self.page.theme_mode == ft.ThemeMode.DARK else self.page.theme
+
+        if not current_theme or not current_theme.color_scheme:
+            return # Cannot determine Colors
+
+        # Usa surface_variant para o fundo do card
+        new_bgcolor = current_theme.color_scheme.surface_variant
+
+        # Verifica se a cor atual é uma cor de notificação antes de sobrescrever
+        is_notification_color = self.main_container.bgcolor and self.main_container.bgcolor not in [self.original_bgcolor, None]
+        
+        self.original_bgcolor = new_bgcolor
+        if not is_notification_color:
+            self.main_container.bgcolor = self.original_bgcolor
+        
+        self._update_minimized_info()
+        
+        try: self.update() 
+        except: pass
+
+    def update_font_sizes(self):
+        """Updates font sizes for all relevant controls in the task."""
+        self.base_font_size = self.page.app_instance.base_font_size
+        
+        self.task_field.text_style.size = self.scale_func(self.base_font_size)
+        self.start_date_field.text_style.size = self.scale_func(self.base_font_size)
+        self.end_date_field.text_style.size = self.scale_func(self.base_font_size)
+        self.status_field.text_style.size = self.scale_func(self.base_font_size)
+        self.priority_field.text_style.size = self.scale_func(self.base_font_size)
+        self.date_error_text.size = self.scale_func(self.base_font_size)
+        self.minimized_dates_text.size = self.scale_func(self.base_font_size)
+        self.minimized_attachments_text.size = self.scale_func(self.base_font_size + 2)
+        self.minimized_due_date_info.controls[1].size = self.scale_func(self.base_font_size)
+        self.minimized_priority_info.controls[1].size = self.scale_func(self.base_font_size)
+        # Attachments list fonts are updated on _load_attachments
 
     def _move_up(self, e):
         if self.on_move_up:
@@ -488,15 +593,17 @@ class TaskRow(ft.Container):
         self.is_minimized = minimized
         if self.is_minimized:
             # Minimizar
-            self.expandable_content.visible = False
+            self.expandable_content.height = 0
+            self.expandable_content.opacity = 0
             self.minimized_info.visible = True
-            self.minimize_btn.icon = ft.Icons.KEYBOARD_ARROW_DOWN
+            self.minimize_btn.rotate.angle = math.pi
             self.minimize_btn.tooltip = "Maximize"
         else:
             # Maximizar
-            self.expandable_content.visible = True
+            self.expandable_content.height = None
+            self.expandable_content.opacity = 1
             self.minimized_info.visible = False
-            self.minimize_btn.icon = ft.Icons.KEYBOARD_ARROW_UP
+            self.minimize_btn.rotate.angle = 0
             self.minimize_btn.tooltip = "Minimize"
         try:
             self.update()
@@ -504,8 +611,7 @@ class TaskRow(ft.Container):
             pass
 
     def set_reorder_mode(self, active: bool):
-        self.move_up_btn.visible = active
-        self.move_down_btn.visible = active
+        self.reorder_arrows_col.width = self.scale_func(40) if active else 0
         try:
             self.update()
         except:
@@ -527,6 +633,31 @@ class TaskRow(ft.Container):
         
         self.minimized_dates_text.value = dates_text
         self.minimized_attachments_text.value = attachments_text
+
+        priority = self.priority_field.value
+        priority_icon_control = self.minimized_priority_info.controls[0]
+        priority_text_control = self.minimized_priority_info.controls[1]
+
+        if priority:
+            self.minimized_priority_info.visible = True
+            priority_text_control.value = priority
+            
+            is_light_theme = self.page and self.page.theme_mode == ft.ThemeMode.LIGHT
+
+            if priority == "Critical":
+                color = ft.Colors.RED_700 if is_light_theme else ft.Colors.RED_400
+                priority_icon_control.name = ft.Icons.KEYBOARD_DOUBLE_ARROW_UP
+            elif priority == "Not Urgent":
+                color = ft.Colors.GREEN_700 if is_light_theme else ft.Colors.GREEN_400
+                priority_icon_control.name = ft.Icons.KEYBOARD_DOUBLE_ARROW_DOWN
+            else: # Normal
+                color = ft.Colors.BLUE_700 if is_light_theme else ft.Colors.BLUE_400
+                priority_icon_control.name = ft.Icons.KEYBOARD_ARROW_RIGHT
+            
+            priority_icon_control.color = color
+            priority_text_control.color = color
+        else:
+            self.minimized_priority_info.visible = False
 
     def _on_drag_will_accept(self, e):
         """Chamado quando um arquivo está sendo arrastado sobre a task"""
@@ -680,17 +811,17 @@ class TaskRow(ft.Container):
 
     def _show_date_error(self):
         self.has_date_error = True
-        self.date_error_indicator.visible = True
-        self.date_error_text.visible = True
+        self.date_error_indicator.visible = True # Este ícone já usa a cor do tema
+        self.date_error_text.visible = True # Este texto já usa a cor do tema
         self.save_btn.disabled = True
-        self.start_date_field.border_color = ft.Colors.RED
-        self.end_date_field.border_color = ft.Colors.RED
+        self.start_date_field.border_color = ft.Colors.ERROR
+        self.end_date_field.border_color = ft.Colors.ERROR
         try: self.update()
         except: pass
 
     def _clear_date_error(self):
         self.has_date_error = False
-        self.date_error_indicator.visible = False
+        self.date_error_indicator.visible = False # Este ícone já usa a cor do tema
         self.date_error_text.visible = False
         self.save_btn.disabled = False
         self.start_date_field.border_color = None
@@ -767,7 +898,7 @@ class TaskRow(ft.Container):
         for att in attachments:
             file_path = att['file_path']; file_name = os.path.basename(file_path)
             self.attachments_list.controls.append(
-                ft.Row([
+                ft.Row([ # The text size here will be updated when update_font_sizes is called, as _load_attachments is called inside it.
                     ft.IconButton(icon=ft.Icons.OPEN_IN_NEW, tooltip=f"Open {file_path}", on_click=lambda e, p=file_path: self._open_attachment(p)),
                     ft.Text(file_name, tooltip=file_path, expand=True),
                     ft.IconButton(icon=ft.Icons.DELETE, icon_size=16, tooltip="Delete attachment", on_click=lambda e, att_id=att['id']: self._delete_attachment(att_id))
@@ -818,13 +949,16 @@ class TaskRow(ft.Container):
         self.scroll_to(duration=1000, curve=ft.AnimationCurve.EASE_IN_OUT)
 
     def _get_due_color(self, days_diff):
-        if days_diff < 0:
-            return ft.Colors.RED_400
-        if days_diff > 3:
-            return ft.Colors.ORANGE_400
+        is_light_theme = self.page and self.page.theme_mode == ft.ThemeMode.LIGHT
 
-        orange = (255, 167, 38)  # ORANGE_400
-        red = (239, 83, 80)      # RED_400
+        if days_diff < 0:
+            return ft.Colors.RED_700 if is_light_theme else ft.Colors.RED_400
+        if days_diff > 3:
+            return ft.Colors.ORANGE_700 if is_light_theme else ft.Colors.ORANGE_400
+
+        # Use darker shades for light theme for better contrast
+        orange = (245, 124, 0) if is_light_theme else (255, 167, 38)  # ORANGE_700 vs ORANGE_400
+        red = (211, 47, 47) if is_light_theme else (239, 83, 80)      # RED_700 vs RED_400
         
         factor = (3 - days_diff) / 3.0
         
@@ -835,33 +969,39 @@ class TaskRow(ft.Container):
         return f"#{r:02x}{g:02x}{b:02x}"
 
     def set_notification_status(self, status, days_diff=None):
+        self.notification_status = status
         if status == "overdue":
-            self.main_container.bgcolor = "#4d2626"  # Dark red tint
+            self.main_container.bgcolor = ft.Colors.with_opacity(0.3, ft.Colors.ERROR)
             self.minimized_due_date_info.visible = True
-            color = ft.Colors.RED_400
+            is_light_theme = self.page and self.page.theme_mode == ft.ThemeMode.LIGHT
+            color = ft.Colors.RED_700 if is_light_theme else ft.Colors.RED_400
             self.minimized_due_date_info.controls[0].color = color
             self.minimized_due_date_info.controls[1].value = f"{-days_diff}d overdue"
             self.minimized_due_date_info.controls[1].color = color
         elif status == "upcoming":
-            self.main_container.bgcolor = "#4d3d26"  # Dark orange tint
+            self.main_container.bgcolor = ft.Colors.with_opacity(0.3, ft.Colors.ORANGE)
             self.minimized_due_date_info.visible = True
             color = self._get_due_color(days_diff)
             self.minimized_due_date_info.controls[0].color = color
             self.minimized_due_date_info.controls[1].value = f"in {days_diff}d"
             self.minimized_due_date_info.controls[1].color = color
         else:  # None
-            self.main_container.bgcolor = self.original_bgcolor
+            if self.original_bgcolor:
+                self.main_container.bgcolor = self.original_bgcolor
             self.minimized_due_date_info.visible = False
         
         try: self.update()
         except: pass
 
     def did_mount(self):
+        self.opacity = 1 # Fade in
         if hasattr(self, 'page') and self.page:
+            self.update_theme_colors()
             try:
                 self.page.overlay.append(self.start_date_picker)
                 self.page.overlay.append(self.end_date_picker)
                 self.page.overlay.append(self.file_picker)
+                self.update() # To start the fade-in animation
                 self.page.update()
             except: pass
 
@@ -941,8 +1081,12 @@ class TaskRow(ft.Container):
 
     def _on_status_change(self, e=None):
         v = (self.status_field.value or "").lower()
-        if v == "ongoing": self.status_field.color = "#FFA726"
-        elif v == "complete": self.status_field.color = "#66BB6A"
+        is_light_theme = self.page and self.page.theme_mode == ft.ThemeMode.LIGHT
+
+        if v == "ongoing":
+            self.status_field.color = ft.Colors.ORANGE_700 if is_light_theme else "#FFA726"  # Orange 400
+        elif v == "complete":
+            self.status_field.color = ft.Colors.GREEN_700 if is_light_theme else "#66BB6A"  # Green 400
         else: self.status_field.color = None
         try: self.status_field.update()
         except: pass
@@ -977,15 +1121,18 @@ class TaskRow(ft.Container):
     def delete(self, e=None):
         self.on_delete(self)
 
+    def duplicate(self, e=None):
+        self.on_duplicate(self)
+
 # ---- EditableTabLabel e dialogs ----
 class EditableTabLabel(ft.Row):
-    def __init__(self, text, on_rename, scale):
+    def __init__(self, text, on_rename, scale_func, base_font_size=12):
         super().__init__(alignment=ft.MainAxisAlignment.CENTER, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=0)
-        self.scale = scale
-        self.text = text; self.on_rename = on_rename
-        self.display_text = ft.Text(self.text, size=self.scale(14), weight=ft.FontWeight.BOLD)
+        self.scale_func = scale_func
+        self.base_font_size = base_font_size; self.text = text; self.on_rename = on_rename
+        self.display_text = ft.Text(self.text, size=self.scale_func(self.base_font_size + 2), weight=ft.FontWeight.BOLD)
         self.clickable_text = ft.GestureDetector(content=self.display_text, on_double_tap=self.start_editing)
-        self.edit_field = ft.TextField(value=self.text, border="none", read_only=False, width=self.scale(120), on_submit=self.finish_editing, on_blur=self.finish_editing)
+        self.edit_field = ft.TextField(value=self.text, border="none", read_only=False, width=self.scale_func(120), on_submit=self.finish_editing, on_blur=self.finish_editing)
         self.edit_field.visible = False
         self.controls = [self.clickable_text, self.edit_field]
 
@@ -999,12 +1146,17 @@ class EditableTabLabel(ft.Row):
             self.text = new_name
         self.clickable_text.visible = True; self.edit_field.visible = False; self.display_text.value = new_name if new_name else old_name; self.update()
 
+    def update_font_sizes(self):
+        self.display_text.size = self.scale_func(self.base_font_size + 2)
+        try: self.update()
+        except: pass
+
 class DeleteConfirmationDialog(ft.AlertDialog):
-    def __init__(self, on_confirm, on_cancel, scale):
+    def __init__(self, on_confirm, on_cancel, scale_func):
         super().__init__()
         self.on_confirm = on_confirm; self.on_cancel = on_cancel
-        self.scale = scale
-        self.confirmation_text = ft.TextField(width=self.scale(300)); self.title = ft.Text()
+        self.scale_func = scale_func
+        self.confirmation_text = ft.TextField(width=self.scale_func(300)); self.title = ft.Text()
         self.error_text = ft.Text("Text does not match. Try again.", color="red", visible=False)
         self.content = ft.Column([ft.Text("This action cannot be undone."), self.confirmation_text, self.error_text], tight=True)
         self.actions = [ft.TextButton("Cancel", on_click=self.cancel), ft.TextButton("Delete", on_click=self.confirm)]
@@ -1026,11 +1178,11 @@ class DeleteConfirmationDialog(ft.AlertDialog):
         self.on_cancel()
 
 class DeleteTaskConfirmationDialog(ft.AlertDialog):
-    def __init__(self, on_confirm, on_cancel, scale):
+    def __init__(self, on_confirm, on_cancel, scale_func):
         super().__init__()
         self.on_confirm = on_confirm; self.on_cancel = on_cancel; self.random_code = ""
-        self.scale = scale
-        self.confirmation_text = ft.TextField(width=self.scale(300)); self.title = ft.Text("Delete task?")
+        self.scale_func = scale_func
+        self.confirmation_text = ft.TextField(width=self.scale_func(300)); self.title = ft.Text("Delete task?")
         self.error_text = ft.Text("Code does not match. Try again.", color="red", visible=False)
         self.code_display_text = ft.Text(weight=ft.FontWeight.BOLD)
         self.content = ft.Column([ft.Text("This action cannot be undone."), ft.Text("To confirm, type the code below:"), self.code_display_text, self.confirmation_text, self.error_text], tight=True, spacing=10)
@@ -1082,11 +1234,17 @@ class AttachFileDialog(ft.AlertDialog):
             self.page.update()
 
 class SettingsDialog(ft.AlertDialog):
-    def __init__(self, on_auto_save_toggle, initial_value, on_close, on_dpi_change, initial_dpi_scale):
+    def __init__(self, on_auto_save_toggle, initial_value, on_close, on_dpi_change, initial_dpi_scale, on_theme_change, initial_theme, scale_func, version, on_font_size_change, initial_font_size):
         super().__init__()
         self.on_auto_save_toggle = on_auto_save_toggle
         self.on_close = on_close
         self.on_dpi_change = on_dpi_change
+        self.on_theme_change = on_theme_change
+        self.on_font_size_change = on_font_size_change
+        self.scale_func = scale_func
+        self.version = version
+        self.base_font_size = initial_font_size
+
         self.title = ft.Text("Settings")
         self.auto_save_checkbox = ft.Checkbox(
             label="Auto save changes on tasks",
@@ -1118,9 +1276,43 @@ class SettingsDialog(ft.AlertDialog):
             on_change=self._handle_dpi_change
         )
 
-        self.content = ft.Column([self.auto_save_checkbox, self.dpi_dropdown], tight=True, spacing=15)
+        self.theme_dropdown = ft.Dropdown(
+            label="Theme",
+            options=[
+                ft.dropdown.Option("Dracula"),
+                ft.dropdown.Option("Dark"),
+                ft.dropdown.Option("Light"),
+            ],
+            value=initial_theme,
+            on_change=self.on_theme_change
+        )
+
+        self.font_size_dropdown = ft.Dropdown(
+            label="Base Font Size",
+            options=[ft.dropdown.Option(str(i)) for i in range(8, 21)],
+            value=str(initial_font_size),
+            on_change=self.on_font_size_change
+        )
+
+        self.version_text = ft.Text(
+            f"Version {self.version}",
+            size=self.scale_func(self.base_font_size - 2),
+            color=ft.Colors.ON_SURFACE_VARIANT,
+            text_align=ft.TextAlign.RIGHT
+        )
+
+        self.content = ft.Column(
+            [self.auto_save_checkbox, self.dpi_dropdown, self.theme_dropdown, self.font_size_dropdown, ft.Divider(height=self.scale_func(20)), ft.Row([ft.Container(expand=True), self.version_text])], 
+            tight=True, spacing=15
+        )
         self.actions = [ft.TextButton("Close", on_click=self.close_dialog)]
         self.actions_alignment = ft.MainAxisAlignment.END
+
+    def update_font_sizes(self):
+        """Updates font sizes for controls inside the dialog."""
+        self.version_text.size = self.scale_func(self.base_font_size - 2)
+        try: self.update()
+        except: pass
 
     def _handle_dpi_change(self, e):
         self.on_dpi_change(float(e.control.value))
@@ -1133,31 +1325,70 @@ class SettingsDialog(ft.AlertDialog):
 class AgendaTab(ft.Column):
     PRIORITY_ORDER = {"Critical": 0, "Normal": 1, "Not Urgent": 2}
 
-    def __init__(self, tab_name, on_delete_tab_request, page, delete_dialog, get_auto_save_setting, scale):
+    def __init__(self, tab_name, on_delete_tab_request, page, delete_dialog, get_auto_save_setting, scale_func, base_font_size):
         self.tab_name = tab_name
         self.on_delete_tab_request = on_delete_tab_request
         self.page = page
         self.delete_dialog = delete_dialog
         self.reorder_mode_active = False
+        self.base_font_size = base_font_size
 
         # ListView simples sem DragTarget para tasks
         self.get_auto_save_setting = get_auto_save_setting
-        self.scale = scale # Store scale function
-        self.ongoing_list = ft.ListView(expand=True, spacing=self.scale(10), padding=self.scale(10))
-        self.complete_list = ft.ListView(expand=True, spacing=self.scale(10), padding=self.scale(10))
+        self.scale_func = scale_func # Store scale function
+        self.ongoing_list = ft.ListView(expand=True, spacing=self.scale_func(10), padding=self.scale_func(10))
+        self.complete_list = ft.ListView(expand=True, spacing=self.scale_func(10), padding=self.scale_func(10))
+
+        # --- Controles para a aba Overview ---
+        self.overview_total_tasks = ft.Text("0", weight=ft.FontWeight.BOLD, size=self.scale_func(28))
+        self.overview_ongoing_tasks = ft.Text("0", weight=ft.FontWeight.BOLD, size=self.scale_func(28), color=ft.Colors.ORANGE)
+        self.overview_completed_tasks = ft.Text("0", weight=ft.FontWeight.BOLD, size=self.scale_func(28), color=ft.Colors.GREEN)
+        self.overview_overdue_tasks = ft.Text("0", weight=ft.FontWeight.BOLD, size=self.scale_func(28), color=ft.Colors.RED)
+        self.overview_completion_progress = ft.ProgressBar(value=0, bar_height=self.scale_func(10), expand=True)
+        self.overview_completion_percent = ft.Text("0%", weight=ft.FontWeight.BOLD)
+
+        self.total_card = self._create_stat_card("Total Tasks", self.overview_total_tasks, ft.Icons.FUNCTIONS, ft.Colors.BLUE)
+        self.ongoing_card = self._create_stat_card("Ongoing", self.overview_ongoing_tasks, ft.Icons.LOOP, ft.Colors.ORANGE)
+        self.completed_card = self._create_stat_card("Completed", self.overview_completed_tasks, ft.Icons.CHECK_CIRCLE_OUTLINE, ft.Colors.GREEN)
+        self.overdue_card = self._create_stat_card("Overdue", self.overview_overdue_tasks, ft.Icons.ERROR_OUTLINE, ft.Colors.RED)
+
+        self.overview_content = ft.Container(
+            ft.Column([
+                ft.Row([self.total_card, self.ongoing_card], spacing=self.scale_func(15)),
+                ft.Row([self.completed_card, self.overdue_card], spacing=self.scale_func(15)),
+                ft.Divider(height=self.scale_func(30)),
+                ft.Text("Completion Progress", style=ft.TextThemeStyle.TITLE_MEDIUM),
+                ft.Container(
+                    content=ft.Row([
+                        self.overview_completion_progress,
+                        self.overview_completion_percent
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=self.scale_func(10)),
+                    padding=ft.padding.only(top=self.scale_func(10))
+                ),
+            ], spacing=self.scale_func(15)),
+            padding=self.scale_func(20),
+            expand=True
+        )
 
         self.task_to_delete = None
-        self.delete_task_dialog = DeleteTaskConfirmationDialog(on_confirm=self.confirm_delete_task, on_cancel=self.cancel_delete_task, scale=self.scale)
+        self.delete_task_dialog = DeleteTaskConfirmationDialog(on_confirm=self.confirm_delete_task, on_cancel=self.cancel_delete_task, scale_func=self.scale_func)
 
-        self.inner_tabs = ft.Tabs(tabs=[
-            ft.Tab(text="Ongoing", content=ft.Container(self.ongoing_list, expand=True, padding=self.scale(10))), 
-            ft.Tab(text="Complete", content=ft.Container(self.complete_list, expand=True, padding=self.scale(10)))
-        ], expand=True)
+        self.inner_tabs = ft.Tabs(
+            tabs=[
+                ft.Tab(text="Overview", content=self.overview_content),
+                ft.Tab(text="Ongoing", content=ft.Container(self.ongoing_list, expand=True, padding=self.scale_func(10))),
+                ft.Tab(text="Complete", content=ft.Container(self.complete_list, expand=True, padding=self.scale_func(10)))
+            ],
+            expand=True,
+            selected_index=1 # Começa na aba "Ongoing"
+        )
 
         self.reorder_mode_btn = ft.IconButton(
             icon=ft.Icons.SWAP_VERT,
             tooltip="Enable reordering",
-            on_click=self.toggle_reorder_mode
+            on_click=self.toggle_reorder_mode,
+            rotate=ft.Rotate(0),
+            animate_rotation=ft.Animation(duration=400, curve=ft.AnimationCurve.EASE_IN_OUT)
         )
         self.toggle_all_tasks_btn = ft.IconButton(
             icon=ft.Icons.UNFOLD_MORE,
@@ -1166,9 +1397,107 @@ class AgendaTab(ft.Column):
         )
         self.add_task_btn = ft.ElevatedButton(text="Add Task", icon=ft.Icons.ADD, on_click=self.add_task)
         self.delete_tab_btn = ft.IconButton(icon=ft.Icons.DELETE, tooltip="Delete Tab", on_click=lambda e: self.on_delete_tab_request(self.tab_name))
-        self.buttons_row = ft.Row([self.reorder_mode_btn, self.toggle_all_tasks_btn, ft.Container(expand=True), self.add_task_btn, self.delete_tab_btn], alignment=ft.MainAxisAlignment.END, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=self.scale(10))
+        self.buttons_row = ft.Row([self.reorder_mode_btn, self.toggle_all_tasks_btn, ft.Container(expand=True), self.add_task_btn, self.delete_tab_btn], alignment=ft.MainAxisAlignment.END, vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=self.scale_func(10))
 
-        super().__init__(spacing=self.scale(12), expand=True, controls=[self.inner_tabs, self.buttons_row])
+        super().__init__(spacing=self.scale_func(12), expand=True, controls=[self.inner_tabs, self.buttons_row])
+
+    def _create_stat_card(self, title: str, value_control: ft.Control, icon: str, icon_color: str):
+        value_control.text_align = ft.TextAlign.RIGHT
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Icon(icon, color=icon_color, size=self.scale_func(18)),
+                            ft.Text(title, weight=ft.FontWeight.BOLD, size=self.scale_func(self.base_font_size)),
+                        ],
+                        spacing=self.scale_func(8),
+                        alignment=ft.MainAxisAlignment.START,
+                    ),
+                    ft.Container(
+                        content=value_control,
+                        alignment=ft.alignment.center_right,
+                        padding=ft.padding.only(top=self.scale_func(10)),
+                    ),
+                ],
+                spacing=self.scale_func(5),
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+            ),
+            padding=self.scale_func(15),
+            border_radius=self.scale_func(10),
+            expand=True,
+            ink=True,
+            on_click=lambda e: None,
+            height=self.scale_func(110)
+        )
+
+    def did_mount(self):
+        self.update_theme_colors()
+
+    def update_theme_colors(self):
+        if not self.page:
+            return
+
+        # Fallback for older Flet versions that don't have `effective_theme`
+        current_theme = None
+        if hasattr(self.page, 'effective_theme') and self.page.effective_theme:
+            current_theme = self.page.effective_theme
+        else:
+            current_theme = self.page.dark_theme if self.page.theme_mode == ft.ThemeMode.DARK else self.page.theme
+
+        if not current_theme or not current_theme.color_scheme:
+            return
+
+        card_bgcolor = current_theme.color_scheme.surface_variant
+        
+        self.total_card.bgcolor = card_bgcolor
+        self.ongoing_card.bgcolor = card_bgcolor
+        self.completed_card.bgcolor = card_bgcolor
+        self.overdue_card.bgcolor = card_bgcolor
+        
+        try:
+            self.overview_content.update()
+        except:
+            pass
+
+    def update_font_sizes(self):
+        """Updates font sizes for this tab and all its tasks."""
+        self.base_font_size = self.page.app_instance.base_font_size
+
+        # Update stat card titles
+        for card in [self.total_card, self.ongoing_card, self.completed_card, self.overdue_card]:
+            title_text = card.content.controls[0].controls[1]
+            title_text.size = self.scale_func(self.base_font_size)
+
+        # Update tasks
+        for task_list in [self.ongoing_list, self.complete_list]:
+            for task in task_list.controls:
+                if isinstance(task, TaskRow):
+                    task.update_font_sizes()
+        try: self.update()
+        except: pass
+
+    def update_overview_stats(self):
+        ongoing_tasks = self.ongoing_list.controls
+        completed_tasks = self.complete_list.controls
+        all_tasks = ongoing_tasks + completed_tasks
+
+        total_count = len(all_tasks)
+        ongoing_count = len(ongoing_tasks)
+        completed_count = len(completed_tasks)
+        overdue_count = sum(1 for task in ongoing_tasks if isinstance(task, TaskRow) and task.notification_status == "overdue")
+        
+        completion_percentage = (completed_count / total_count) if total_count > 0 else 0
+
+        self.overview_total_tasks.value = str(total_count)
+        self.overview_ongoing_tasks.value = str(ongoing_count)
+        self.overview_completed_tasks.value = str(completed_count)
+        self.overview_overdue_tasks.value = str(overdue_count)
+        self.overview_completion_progress.value = completion_percentage
+        self.overview_completion_percent.value = f"{completion_percentage:.0%}"
+
+        try: self.overview_content.update()
+        except: pass
 
     def toggle_reorder_mode(self, e):
         self.reorder_mode_active = not self.reorder_mode_active
@@ -1177,10 +1506,12 @@ class AgendaTab(ft.Column):
             self.reorder_mode_btn.icon = ft.Icons.LOCK
             self.reorder_mode_btn.tooltip = "Disable reordering (lock order)"
             self.reorder_mode_btn.icon_color = ft.Colors.AMBER
+            self.reorder_mode_btn.rotate.angle += math.pi * 2
         else:
             self.reorder_mode_btn.icon = ft.Icons.SWAP_VERT
             self.reorder_mode_btn.tooltip = "Enable reordering"
             self.reorder_mode_btn.icon_color = None
+            self.reorder_mode_btn.rotate.angle -= math.pi * 2
 
         all_tasks = self.ongoing_list.controls + self.complete_list.controls
         for task in all_tasks:
@@ -1221,21 +1552,34 @@ class AgendaTab(ft.Column):
         tasks.sort(key=lambda t: self.PRIORITY_ORDER.get(t.get("priority", "Normal"), 99))
 
         for t in tasks:
-            row = TaskRow(self.on_save_task, self.on_delete_task, self.on_move_task_up, self.on_move_task_down, title=t["title"], task=t["task"], start_date=t["start_date"], end_date=t["end_date"], status=t["status"], priority=t["priority"], db_id=t["id"], get_auto_save_setting=self.get_auto_save_setting, scale=self.scale)
+            row = TaskRow(self.on_save_task, self.on_delete_task, self.on_duplicate_task, self.on_move_task_up, self.on_move_task_down, title=t["title"], task=t["task"], start_date=t["start_date"], end_date=t["end_date"], status=t["status"], priority=t["priority"], db_id=t["id"], get_auto_save_setting=self.get_auto_save_setting, scale=self.scale_func, base_font_size=self.base_font_size)
             if t["status"] == "Ongoing":
                 self.ongoing_list.controls.append(row)
             else:
                 self.complete_list.controls.append(row)
         self.update_arrow_states()
+        self.update_overview_stats()
         try: self.update()
         except: pass
 
-    def add_task(self, e=None):
-        row = TaskRow(self.on_save_task, self.on_delete_task, self.on_move_task_up, self.on_move_task_down, get_auto_save_setting=self.get_auto_save_setting, scale=self.scale)
+    def add_task(self, e=None, data=None):
+        row = TaskRow(
+            on_save=self.on_save_task,
+            on_delete=self.on_delete_task,
+            on_duplicate=self.on_duplicate_task,
+            on_move_up=self.on_move_task_up,
+            on_move_down=self.on_move_task_down,
+            get_auto_save_setting=self.get_auto_save_setting,
+            scale=self.scale_func,
+            base_font_size=self.base_font_size,
+            **(data or {})
+        )
         row.set_reorder_mode(self.reorder_mode_active)
         self.add_row_to_list(row, row.status_field.value)
+        self.update_overview_stats()
         self.update_arrow_states()
-        if self.get_auto_save_setting and self.get_auto_save_setting():
+        # Don't auto-save duplicated tasks, let the caller handle it
+        if (self.get_auto_save_setting and self.get_auto_save_setting()) and not data:
             row.save()
         try: self.update()
         except: pass
@@ -1283,6 +1627,21 @@ class AgendaTab(ft.Column):
                     except:
                         pass
 
+    def on_duplicate_task(self, original_task_row):
+        data = original_task_row.get_data()
+        data['title'] = f"{data.get('title', '')} (Copy)"
+
+        # Create a new task row instance by reusing add_task
+        new_row = self.add_task(data=data)
+
+        # Save the new task to get a db_id and persist it
+        new_row.save()
+
+        try:
+            new_row.scroll_to(duration=500)
+        except:
+            pass
+
     def on_save_task(self, row, data):
         is_new_task = not row.db_id
         status_changed = is_new_task or (row.original_data.get("status") != data.get("status"))
@@ -1293,6 +1652,7 @@ class AgendaTab(ft.Column):
             row.db_id = db.add_task(self.tab_name, data["title"], data["task"], data["start_date"], data["end_date"], data["status"], data["priority"])
         if is_new_task and row.db_id:
             row.attach_btn.disabled = False
+            row.duplicate_btn.disabled = False
             row.display_id_text.value = f"#{row.db_id}"
             row.display_id_text.visible = True
             row._update_minimized_info()
@@ -1322,6 +1682,7 @@ class AgendaTab(ft.Column):
                     except: pass
         self.task_to_delete = None
         self.delete_task_dialog.open = False
+        self.update_overview_stats()
         self.update_arrow_states()
         try: self.update()
         except: pass
@@ -1340,6 +1701,7 @@ class AgendaTab(ft.Column):
                 except: pass
         # reinsert according to current status
         self.add_row_to_list(row, row.status_field.value)
+        self.update_overview_stats()
         self.update_arrow_states()
         try: self.update()
         except: pass
@@ -1364,31 +1726,124 @@ class AgendaApp(ft.Column):
             # Otherwise, use the fixed value
             self.dpi_scale = float(self.dpi_scale_setting)
 
-        self.scale = lambda value: int(value * self.dpi_scale)
+        self.scale_func = lambda value: int(value * self.dpi_scale)
 
         self.tabs = ft.Tabs(selected_index=0, scrollable=True, expand=True)
         self.auto_save_enabled = db.get_setting('auto_save', 'False') == 'True'
+        self.theme_name = db.get_setting('theme', 'Dracula')
+        self.base_font_size = int(db.get_setting('font_size', '12'))
         self.settings_dialog = SettingsDialog(
             on_auto_save_toggle=self.toggle_auto_save,
             initial_value=self.auto_save_enabled,
             on_close=self.close_settings_dialog,
             on_dpi_change=self.change_dpi,
-            initial_dpi_scale=self.dpi_scale_setting
+            initial_dpi_scale=self.dpi_scale_setting,
+            on_theme_change=self.change_theme,
+            initial_theme=self.theme_name,
+            scale_func=self.scale_func,
+            version=VERSION,
+            on_font_size_change=self.change_font_size,
+            initial_font_size=self.base_font_size
         )
-        self.delete_dialog = DeleteConfirmationDialog(on_confirm=self.delete_tab, on_cancel=self.close_delete_dialog, scale=self.scale)
+        self.delete_dialog = DeleteConfirmationDialog(on_confirm=self.delete_tab, on_cancel=self.close_delete_dialog, scale_func=self.scale_func)
         self.add_tab_btn = ft.ElevatedButton(text="New Tab", icon=ft.Icons.ADD, on_click=self.add_new_tab)
         
         self.settings_btn = ft.IconButton(icon=ft.Icons.SETTINGS, tooltip="Settings", on_click=self.open_settings_dialog)
         self.pin_switch = ft.Switch(value=False, on_change=self.toggle_pin, tooltip="Pin window open")
         self.header = ft.Row([
-            ft.Text("📝 Todo APP", style=ft.TextThemeStyle.HEADLINE_SMALL),
+            ft.Text(f"📝 {APP_NAME}", style=ft.TextThemeStyle.HEADLINE_SMALL),
             ft.Container(expand=True), 
             self.settings_btn, 
             self.pin_switch, self.add_tab_btn
         ])
         
         self.controls = [self.header, self.tabs]
+        self.apply_theme(self.theme_name)
         self.start_notification_checker()
+
+    def change_font_size(self, e):
+        """Handles font size changes from the settings dialog."""
+        new_size = int(e.control.value)
+        self.base_font_size = new_size
+        db.set_setting('font_size', str(new_size))
+        self.update_all_font_sizes()
+
+    def update_all_font_sizes(self):
+        """Propagates font size changes to all components."""
+        for tab in self.tabs.tabs:
+            if isinstance(tab.content, AgendaTab):
+                tab.content.update_font_sizes()
+            if isinstance(tab.tab_content, EditableTabLabel):
+                tab.tab_content.base_font_size = self.base_font_size
+                tab.tab_content.update_font_sizes()
+        
+        self.settings_dialog.base_font_size = self.base_font_size
+        self.settings_dialog.update_font_sizes()
+        self.page.update()
+
+    def change_theme(self, e):
+        theme_name = e.control.value
+        db.set_setting('theme', theme_name)
+        self.apply_theme(theme_name)
+
+    def apply_theme(self, theme_name):
+        self.theme_name = theme_name
+
+        page_transitions = ft.PageTransitionsTheme(
+            android=ft.PageTransitionTheme.NONE,
+            ios=ft.PageTransitionTheme.NONE,
+            linux=ft.PageTransitionTheme.NONE,
+            macos=ft.PageTransitionTheme.NONE,
+            windows=ft.PageTransitionTheme.NONE,
+        )
+
+        if theme_name == "Light":
+            self.page.theme_mode = ft.ThemeMode.LIGHT
+            self.page.theme = ft.Theme(
+                color_scheme=ft.ColorScheme(
+                    primary=ft.Colors.BLUE,
+                    background="#ffffff",
+                    surface="#ffffff",
+                    surface_variant="#e9ecef",  # Cor do card (mais escura)
+                    on_background=ft.Colors.BLACK,
+                    on_surface=ft.Colors.BLACK,
+                    on_surface_variant=ft.Colors.BLACK,
+                    error=ft.Colors.RED_700,
+                    outline=ft.Colors.GREY_400,
+                ),
+                page_transitions=page_transitions,
+            )
+            # Fornece um tema escuro básico como fallback
+            self.page.dark_theme = ft.Theme(color_scheme_seed="blue", page_transitions=page_transitions)
+        elif theme_name == "Dark":
+            self.page.theme_mode = ft.ThemeMode.DARK
+            # Fornece um tema claro básico como fallback
+            self.page.theme = ft.Theme(color_scheme_seed="blue", page_transitions=page_transitions)
+            self.page.dark_theme = ft.Theme(
+                color_scheme=ft.ColorScheme(
+                    primary=ft.Colors.BLUE_300,
+                    background="#1f2937",
+                    surface="#1f2937",
+                    surface_variant="#374151",  # Cor do card
+                    on_background=ft.Colors.WHITE,
+                    on_surface=ft.Colors.WHITE,
+                    on_surface_variant=ft.Colors.WHITE,
+                    error=ft.Colors.RED_400,
+                    outline=ft.Colors.GREY_700,
+                ),
+                page_transitions=page_transitions,
+            )
+        elif theme_name == "Dracula":
+            self.page.theme_mode = ft.ThemeMode.DARK
+            self.page.theme = DRACULA_THEME
+            self.page.dark_theme = DRACULA_THEME
+        
+        for tab in self.tabs.tabs:
+            if isinstance(tab.content, AgendaTab):
+                tab.content.update_theme_colors()
+                for task_row in (tab.content.ongoing_list.controls + tab.content.complete_list.controls):
+                    if isinstance(task_row, TaskRow):task_row.update_theme_colors()
+        self.page.update()
 
     def toggle_auto_save(self, e):
         self.auto_save_enabled = e.control.value
@@ -1429,33 +1884,31 @@ class AgendaApp(ft.Column):
 
     def check_all_due_dates(self):
         if not self.page: return
-        
-        all_tasks = []
+
         for tab in self.tabs.tabs:
             agenda_tab = tab.content
             if isinstance(agenda_tab, AgendaTab):
-                all_tasks.extend(agenda_tab.ongoing_list.controls)
+                for task_row in agenda_tab.ongoing_list.controls:
+                    if not isinstance(task_row, TaskRow) or task_row.status_field.value != "Ongoing":
+                        task_row.set_notification_status(None) # Reset color
+                        continue
 
-        for task_row in all_tasks:
-            if not isinstance(task_row, TaskRow) or task_row.status_field.value != "Ongoing":
-                task_row.set_notification_status(None) # Reset color
-                continue
+                    end_date_str = task_row.end_date_field.value
+                    if not (end_date_str and (end_date := task_row._parse_date(end_date_str))):
+                        task_row.set_notification_status(None) # Reset color
+                        continue
 
-            end_date_str = task_row.end_date_field.value
-            if not (end_date_str and (end_date := task_row._parse_date(end_date_str))):
-                task_row.set_notification_status(None) # Reset color
-                continue
-
-            days_diff = (end_date - datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)).days
-            status = "overdue" if days_diff < 0 else "upcoming" if 0 <= days_diff <= 3 else None
-            
-            task_row.set_notification_status(status, days_diff)
+                    days_diff = (end_date - datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)).days
+                    status = "overdue" if days_diff < 0 else "upcoming" if 0 <= days_diff <= 3 else None
+                    
+                    task_row.set_notification_status(status, days_diff)
+                agenda_tab.update_overview_stats()
 
     def toggle_pin(self, e):
         self.page.pinned = self.pin_switch.value
         if self.page.pinned:
-            self.page.window.width = self.scale(650)
-            self.page.window.height = self.scale(900)
+            self.page.window.width = self.scale_func(650)
+            self.page.window.height = self.scale_func(900)
             self.page.app_container.opacity = 1
             self.page.mini_icon.visible = False
             try: self.page.update()
@@ -1480,8 +1933,8 @@ class AgendaApp(ft.Column):
             db.add_tab("Tab 1"); tab_names = ["Tab 1"]
         self.tabs.tabs.clear()
         for name in tab_names:
-            tab_content = AgendaTab(name, self.open_delete_dialog_request, self.page, self.delete_dialog, self.get_auto_save_setting, self.scale)
-            editable_label = EditableTabLabel(name, self.rename_tab, self.scale)
+            tab_content = AgendaTab(name, self.open_delete_dialog_request, self.page, self.delete_dialog, self.get_auto_save_setting, self.scale_func, self.base_font_size)
+            editable_label = EditableTabLabel(name, self.rename_tab, self.scale_func, self.base_font_size)
             tab = ft.Tab(content=tab_content, tab_content=editable_label)
             self.tabs.tabs.append(tab)
         for t in self.tabs.tabs:
@@ -1494,8 +1947,8 @@ class AgendaApp(ft.Column):
 
     def _create_tab(self, tab_name):
         db.add_tab(tab_name)
-        tab_content = AgendaTab(tab_name, self.open_delete_dialog_request, self.page, self.delete_dialog, self.get_auto_save_setting, self.scale)
-        editable_label = EditableTabLabel(tab_name, self.rename_tab, self.scale)
+        tab_content = AgendaTab(tab_name, self.open_delete_dialog_request, self.page, self.delete_dialog, self.get_auto_save_setting, self.scale_func, self.base_font_size)
+        editable_label = EditableTabLabel(tab_name, self.rename_tab, self.scale_func, self.base_font_size)
         tab = ft.Tab(content=tab_content, tab_content=editable_label)
         self.tabs.tabs.append(tab)
         try:
@@ -1560,19 +2013,19 @@ def main(page: ft.Page):
     page.app_instance = app
 
     # Apply scaling to window and top-level containers
-    scale = app.scale
-    page.window.width = scale(650)
-    page.window.height = scale(900)
+    scale_func = app.scale_func
+    page.window.width = scale_func(650)
+    page.window.height = scale_func(900)
 
     # Hide window to prevent flicker during initial positioning
     page.window.opacity = 0
     page.update()
 
-    page.app_container = ft.Container(content=app, expand=True, opacity=1, animate_opacity=ft.Animation(0), padding=scale(15))
+    page.app_container = ft.Container(content=app, expand=True, opacity=1, animate_opacity=ft.Animation(duration=300, curve=ft.AnimationCurve.EASE_OUT), padding=scale_func(15))
     page.mini_icon = ft.Container(
-        width=scale(100), height=scale(100), 
+        width=scale_func(100), height=scale_func(100), 
         alignment=ft.alignment.center, 
-        content=ft.Icon(ft.Icons.EVENT_NOTE, size=scale(60), color=ft.Colors.BLUE), 
+        content=ft.Icon(ft.Icons.EVENT_NOTE, size=scale_func(60), color=ft.Colors.BLUE), 
         visible=False)
     stack = ft.Stack(expand=True, controls=[page.app_container, page.mini_icon])
     page.add(stack)
@@ -1588,7 +2041,7 @@ def main(page: ft.Page):
             screen_w, screen_h = pyautogui.size()
             
             # Calculate desired position
-            desired_left = screen_w - page.window.width - scale(50)
+            desired_left = screen_w - page.window.width - scale_func(50)
             desired_top = 10
 
             # Clamp values to ensure the window is always visible on screen
@@ -1621,11 +2074,11 @@ def main(page: ft.Page):
                 
                 # Only act if the state (inside/outside) has changed
                 if is_inside and not app_is_visible:
-                    page.window.width = scale(650); page.window.height = scale(900)
+                    page.window.width = scale_func(650); page.window.height = scale_func(900)
                     page.app_container.opacity = 1; page.mini_icon.visible = False
                     position_window(); page.update()
                 elif not is_inside and app_is_visible:
-                    page.window.width = scale(100); page.window.height = scale(100)
+                    page.window.width = scale_func(100); page.window.height = scale_func(100)
                     page.app_container.opacity = 0; page.mini_icon.visible = True
                     position_window(); page.update()
                 
