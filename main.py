@@ -1389,7 +1389,13 @@ class DeleteTaskConfirmationDialog(ft.AlertDialog):
         self.confirmation_text = ft.TextField(width=self.scale_func(300)); self.title = ft.Text("Delete task?")
         self.error_text = ft.Text("Code does not match. Try again.", color="red", visible=False)
         self.code_display_text = ft.Text(weight=ft.FontWeight.BOLD)
-        self.content = ft.Column([ft.Text("This action cannot be undone."), ft.Text("To confirm, type the code below:"), self.code_display_text, self.confirmation_text, self.error_text], tight=True, spacing=10)
+        self.content = ft.Column([
+            ft.Text("This action cannot be undone."), 
+            ft.Text("To confirm, type the code below:"), 
+            ft.Row([self.code_display_text], alignment=ft.MainAxisAlignment.CENTER), 
+            self.confirmation_text, 
+            self.error_text
+        ], tight=True, spacing=15)
         self.actions = [ft.TextButton("Cancel", on_click=self.cancel), ft.TextButton("Delete", on_click=self.confirm)]
         self.actions_alignment = ft.MainAxisAlignment.END
 
@@ -1400,7 +1406,7 @@ class DeleteTaskConfirmationDialog(ft.AlertDialog):
     def open_dialog(self):
         self.generate_random_code()
         self.code_display_text.value = self.random_code
-        self.confirmation_text.label = f"Type '{self.random_code}' to confirm"
+        self.confirmation_text.label = "Type"
         self.confirmation_text.value = ""; self.error_text.visible = False; self.open = True
 
     def confirm(self, e):
@@ -1438,7 +1444,7 @@ class AttachFileDialog(ft.AlertDialog):
             self.page.update()
 
 class SettingsDialog(ft.AlertDialog):
-    def __init__(self, on_auto_save_toggle, initial_value, on_close, on_dpi_change, initial_dpi_scale, on_theme_change, initial_theme, scale_func, version, on_font_size_change, initial_font_size, on_carousel_settings_change, initial_carousel_show_progress, initial_carousel_speed, on_translucency_change, initial_translucency_enabled, initial_translucency_level):
+    def __init__(self, on_auto_save_toggle, initial_value, on_close, on_dpi_change, initial_dpi_scale, on_theme_change, initial_theme, scale_func, version, on_font_size_change, initial_font_size, on_carousel_settings_change, initial_carousel_show_progress, initial_carousel_speed, on_translucency_change, initial_translucency_enabled, initial_translucency_level, on_carousel_visibility_change, initial_carousel_show_total, initial_carousel_show_ongoing, initial_carousel_show_completed, initial_carousel_show_overdue):
         super().__init__()
         self.on_auto_save_toggle = on_auto_save_toggle
         self.on_close = on_close
@@ -1446,9 +1452,11 @@ class SettingsDialog(ft.AlertDialog):
         self.on_theme_change = on_theme_change
         self.on_font_size_change = on_font_size_change
         self.on_carousel_settings_change = on_carousel_settings_change
+        self.on_carousel_visibility_change = on_carousel_visibility_change
         self.on_translucency_change = on_translucency_change
         self.scale_func = scale_func
         self.version = version
+        self.modal = True # Important for dropdowns inside tabs
         self.base_font_size = initial_font_size
 
         self.title = ft.Text("Settings")
@@ -1517,6 +1525,27 @@ class SettingsDialog(ft.AlertDialog):
             expand=True
         )
 
+        self.carousel_show_total_checkbox = ft.Checkbox(
+            label="Total",
+            value=initial_carousel_show_total,
+            on_change=self._handle_carousel_visibility_change
+        )
+        self.carousel_show_ongoing_checkbox = ft.Checkbox(
+            label="Ongoing",
+            value=initial_carousel_show_ongoing,
+            on_change=self._handle_carousel_visibility_change
+        )
+        self.carousel_show_completed_checkbox = ft.Checkbox(
+            label="Completed",
+            value=initial_carousel_show_completed,
+            on_change=self._handle_carousel_visibility_change
+        )
+        self.carousel_show_overdue_checkbox = ft.Checkbox(
+            label="Overdue",
+            value=initial_carousel_show_overdue,
+            on_change=self._handle_carousel_visibility_change
+        )
+
         self.translucency_enabled_checkbox = ft.Checkbox(
             label="Enable mini-view translucency",
             value=initial_translucency_enabled,
@@ -1533,40 +1562,76 @@ class SettingsDialog(ft.AlertDialog):
             disabled=not initial_translucency_enabled
         )
 
-        self.version_text = ft.Text(
-            f"Version {self.version}",
-            size=self.scale_func(self.base_font_size - 2),
-            color=ft.Colors.ON_SURFACE_VARIANT,
-            text_align=ft.TextAlign.RIGHT
+        # --- Tab Contents ---
+        general_tab_content = ft.Column([self.auto_save_checkbox], spacing=20)
+
+        appearance_tab_content = ft.Column(
+            [
+                ft.Text("Display", weight=ft.FontWeight.BOLD),
+                self.dpi_dropdown,
+                ft.Divider(),
+                ft.Text("Theme & Fonts", weight=ft.FontWeight.BOLD),
+                self.theme_dropdown,
+                self.font_size_dropdown,
+            ],
+            spacing=15
         )
 
-        self.content = ft.Column(
+        mini_view_tab_content = ft.Column(
             [
-                self.auto_save_checkbox, self.dpi_dropdown, self.theme_dropdown, self.font_size_dropdown,
-                ft.Divider(),
-                ft.Text("Mini-view Carousel", weight=ft.FontWeight.BOLD),
+                ft.Text("Carousel", weight=ft.FontWeight.BOLD),
                 self.carousel_show_progress_checkbox,
                 self.carousel_speed_dropdown,
+                ft.Text("Visible Stats:"),
+                ft.Column([
+                    self.carousel_show_total_checkbox,
+                    self.carousel_show_ongoing_checkbox,
+                    self.carousel_show_completed_checkbox,
+                    self.carousel_show_overdue_checkbox,
+                ]),
                 ft.Divider(),
-                ft.Text("Mini-view Appearance", weight=ft.FontWeight.BOLD),
+                ft.Text("Appearance", weight=ft.FontWeight.BOLD),
                 self.translucency_enabled_checkbox,
                 self.translucency_slider,
-                ft.Divider(height=self.scale_func(20)), 
-                ft.Row([ft.Container(expand=True), self.version_text])
             ],
-            tight=True, spacing=20
+            spacing=15
+        )
+
+        about_tab_content = ft.Column(
+            [
+                ft.Text(f"{APP_NAME} - {VERSION}", size=self.scale_func(16), weight=ft.FontWeight.BOLD),
+                ft.Text("A simple and effective to-do list application."),
+                ft.Divider(),
+                ft.Text(f"Data is stored locally at:", size=self.scale_func(10)),
+                ft.TextField(value=APP_DATA_DIR, read_only=True, border=ft.InputBorder.UNDERLINE, text_style=ft.TextStyle(size=self.scale_func(10))),
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=10
+        )
+
+        # --- Main Tabs Control ---
+        self.content = ft.Tabs(
+            [
+                ft.Tab(text="General", icon=ft.Icons.TUNE, content=ft.Container(general_tab_content, padding=ft.padding.symmetric(vertical=20))),
+                ft.Tab(text="Appearance", icon=ft.Icons.PALETTE_OUTLINED, content=ft.Container(appearance_tab_content, padding=ft.padding.symmetric(vertical=20))),
+                ft.Tab(text="Mini-view", icon=ft.Icons.VIEW_COMPACT_ALT_OUTLINED, content=ft.Container(mini_view_tab_content, padding=ft.padding.symmetric(vertical=20))),
+                ft.Tab(text="About", icon=ft.Icons.INFO_OUTLINE, content=ft.Container(about_tab_content, padding=20)),
+            ],
+            expand=True,
         )
         self.actions = [ft.TextButton("Close", on_click=self.close_dialog)]
         self.actions_alignment = ft.MainAxisAlignment.END
 
     def update_font_sizes(self):
         """Updates font sizes for controls inside the dialog."""
-        self.version_text.size = self.scale_func(self.base_font_size - 2)
-        try: self.update()
-        except: pass
+        # No longer needed as version is in About tab with standard text sizes
+        pass
 
     def _handle_dpi_change(self, e):
         self.on_dpi_change(float(e.control.value))
+
+    def _handle_carousel_visibility_change(self, e):
+        self.on_carousel_visibility_change()
 
     def _handle_translucency_change(self, e):
         # When checkbox is toggled, enable/disable slider
@@ -1610,19 +1675,24 @@ class MiniViewCarousel(ft.Container):
         tab_name = ft.Text(tab_name_str, weight=ft.FontWeight.BOLD, size=self.scale_func(12), text_align=ft.TextAlign.CENTER, no_wrap=True)
         
         show_progress = db.get_setting('carousel_show_progress', 'True') == 'True'
-        progress_bar = ft.ProgressBar(bar_height=self.scale_func(6), expand=True, value=stats.get("progress", 0), visible=show_progress)
+        progress_bar = ft.ProgressBar(bar_height=self.scale_func(6), expand=True, value=stats.get("progress", 0), visible=show_progress)        
         
-        total_tasks = self._create_stat_display(ft.Icons.FUNCTIONS, ft.Colors.BLUE, "Total Tasks", stats.get("total", "0"))
-        ongoing_tasks = self._create_stat_display(ft.Icons.LOOP, ft.Colors.ORANGE, "Ongoing", stats.get("ongoing", "0"))
-        completed_tasks = self._create_stat_display(ft.Icons.CHECK_CIRCLE_OUTLINE, ft.Colors.GREEN, "Complete", stats.get("completed", "0"))
-        overdue_tasks = self._create_stat_display(ft.Icons.ERROR_OUTLINE, ft.Colors.RED, "Overdue", stats.get("overdue", "0"))
+        stats_controls = []
+        if db.get_setting('carousel_show_total', 'True') == 'True':
+            stats_controls.append(self._create_stat_display(ft.Icons.FUNCTIONS, ft.Colors.BLUE, "Total Tasks", stats.get("total", "0")))
+        if db.get_setting('carousel_show_ongoing', 'True') == 'True':
+            stats_controls.append(self._create_stat_display(ft.Icons.LOOP, ft.Colors.ORANGE, "Ongoing", stats.get("ongoing", "0")))
+        if db.get_setting('carousel_show_completed', 'True') == 'True':
+            stats_controls.append(self._create_stat_display(ft.Icons.CHECK_CIRCLE_OUTLINE, ft.Colors.GREEN, "Complete", stats.get("completed", "0")))
+        if db.get_setting('carousel_show_overdue', 'True') == 'True':
+            stats_controls.append(self._create_stat_display(ft.Icons.ERROR_OUTLINE, ft.Colors.RED, "Overdue", stats.get("overdue", "0")))
 
         return ft.Column(
             [
                 tab_name,
                 ft.Container(progress_bar, padding=ft.padding.symmetric(vertical=self.scale_func(1))),
                 ft.Row(
-                    [total_tasks, ongoing_tasks, completed_tasks, overdue_tasks],
+                    stats_controls,
                     alignment=ft.MainAxisAlignment.SPACE_AROUND
                 ),
             ],
@@ -2185,6 +2255,10 @@ class AgendaApp(ft.Column):
         self.theme_name = db.get_setting('theme', 'Dracula')
         self.base_font_size = int(db.get_setting('font_size', '12'))
         self.carousel_show_progress = db.get_setting('carousel_show_progress', 'True') == 'True'
+        self.carousel_show_total = db.get_setting('carousel_show_total', 'True') == 'True'
+        self.carousel_show_ongoing = db.get_setting('carousel_show_ongoing', 'True') == 'True'
+        self.carousel_show_completed = db.get_setting('carousel_show_completed', 'True') == 'True'
+        self.carousel_show_overdue = db.get_setting('carousel_show_overdue', 'True') == 'True'
         self.carousel_speed = int(db.get_setting('carousel_speed', '5'))
         self.translucency_enabled = db.get_setting('translucency_enabled', 'False') == 'True'
         self.translucency_level = int(db.get_setting('translucency_level', '80'))
@@ -2205,7 +2279,12 @@ class AgendaApp(ft.Column):
             initial_carousel_speed=self.carousel_speed,
             on_translucency_change=self.change_translucency_settings,
             initial_translucency_enabled=self.translucency_enabled,
-            initial_translucency_level=self.translucency_level
+            initial_translucency_level=self.translucency_level,
+            on_carousel_visibility_change=self.change_carousel_visibility_settings,
+            initial_carousel_show_total=self.carousel_show_total,
+            initial_carousel_show_ongoing=self.carousel_show_ongoing,
+            initial_carousel_show_completed=self.carousel_show_completed,
+            initial_carousel_show_overdue=self.carousel_show_overdue
         )
         self.delete_dialog = DeleteConfirmationDialog(on_confirm=self.delete_tab, on_cancel=self.close_delete_dialog, scale_func=self.scale_func)
         self.add_tab_btn = ft.ElevatedButton(text="New Tab", icon=ft.Icons.ADD, on_click=self.add_new_tab)
@@ -2213,7 +2292,7 @@ class AgendaApp(ft.Column):
         self.settings_btn = ft.IconButton(icon=ft.Icons.SETTINGS, tooltip="Settings", on_click=self.open_settings_dialog)
         self.pin_switch = ft.Switch(value=False, on_change=self.toggle_pin, tooltip="Pin window open")
         self.header = ft.Row([
-            ft.Text(f"📝 {APP_NAME}", style=ft.TextThemeStyle.HEADLINE_SMALL),
+            ft.Text(f"{APP_NAME}", style=ft.TextThemeStyle.HEADLINE_SMALL),
             ft.Container(expand=True), 
             self.settings_btn, 
             self.pin_switch, self.add_tab_btn
@@ -2261,6 +2340,22 @@ class AgendaApp(ft.Column):
 
         self.carousel_show_progress = show_progress
         self.carousel_speed = int(speed)
+
+    def change_carousel_visibility_settings(self):
+        show_total = self.settings_dialog.carousel_show_total_checkbox.value
+        show_ongoing = self.settings_dialog.carousel_show_ongoing_checkbox.value
+        show_completed = self.settings_dialog.carousel_show_completed_checkbox.value
+        show_overdue = self.settings_dialog.carousel_show_overdue_checkbox.value
+
+        db.set_setting('carousel_show_total', str(show_total))
+        db.set_setting('carousel_show_ongoing', str(show_ongoing))
+        db.set_setting('carousel_show_completed', str(show_completed))
+        db.set_setting('carousel_show_overdue', str(show_overdue))
+
+        self.carousel_show_total = show_total
+        self.carousel_show_ongoing = show_ongoing
+        self.carousel_show_completed = show_completed
+        self.carousel_show_overdue = show_overdue
 
     def change_font_size(self, e):
         """Handles font size changes from the settings dialog."""
@@ -2523,11 +2618,11 @@ def main(page: ft.Page):
         screen_w, _ = pyautogui.size()
         base_left_small = screen_w - scale_func(100) - 50
         base_left_large = screen_w - scale_func(650) - 10
-        base_top = 10
+        base_top = 30
     except:
         base_left_small = 1000
         base_left_large = 400
-        base_top = 10
+        base_top = 30
 
     page.window.left = base_left_small
     page.window.top = base_top
@@ -2537,7 +2632,7 @@ def main(page: ft.Page):
         content=app,
         expand=True,
         opacity=0,
-        animate_opacity=200,   # fade rápido
+        animate_opacity=10,   # fade rápido
         padding=scale_func(15)
     )
     page.mini_icon = MiniViewCarousel(app, scale_func)
@@ -2563,7 +2658,7 @@ def main(page: ft.Page):
         # Fade out window
         page.window.opacity = 0
         page.update()
-        time.sleep(0.2)
+        time.sleep(0.05)
 
         # Change layout while invisible
         page.window.left = base_left_large
@@ -2585,6 +2680,10 @@ def main(page: ft.Page):
     def shrink():
         if page.is_animating: return
         page.is_animating = True
+
+        # Close settings dialog if it's open
+        if app.settings_dialog.open:
+            app.settings_dialog.open = False
 
         # Fade out window
         page.window.opacity = 0
@@ -2619,7 +2718,7 @@ def main(page: ft.Page):
     # --- Checagem do mouse ---
     def check_mouse():
         while True:
-            #time.sleep(0.02) # check every 20ms
+            
             try:
                 # Don't shrink if pinned, animating, or a picker is open
                 if page.pinned or page.is_animating or page.is_picker_open or page.is_file_picker_open:
