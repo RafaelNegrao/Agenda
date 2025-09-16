@@ -1200,18 +1200,14 @@ class TaskRow(ft.Container):
         if hasattr(self, 'page') and self.page:
             self.update_theme_colors()
             try:
-                self.page.overlay.append(self.start_date_picker)
-                self.page.overlay.append(self.end_date_picker)
                 self.page.overlay.append(self.file_picker)
-                self.update() # To start the fade-in animation
+                self.update()  # To start the fade-in animation
                 self.page.update()
             except: pass
 
     def will_unmount(self):
         if hasattr(self, 'page') and self.page:
             try:
-                self.page.overlay.remove(self.start_date_picker)
-                self.page.overlay.remove(self.end_date_picker)
                 self.page.overlay.remove(self.file_picker)
                 self.page.update()
             except: pass
@@ -1228,8 +1224,11 @@ class TaskRow(ft.Container):
         else:
             # Reset if no end date is set
             self.start_date_picker.last_date = datetime(2030, 12, 31)
+        if self.start_date_picker not in self.page.overlay:
+            self.page.overlay.append(self.start_date_picker)
         self.page.is_picker_open = True
-        self.page.open(self.start_date_picker)
+        self.start_date_picker.open = True
+        self.page.update()
 
     def _open_end_date_picker(self, e):
         start_date = self._parse_date(self.start_date_field.value)
@@ -1238,14 +1237,23 @@ class TaskRow(ft.Container):
         else:
             # Reset if no start date is set
             self.end_date_picker.first_date = datetime(2020, 1, 1)
+        if self.end_date_picker not in self.page.overlay:
+            self.page.overlay.append(self.end_date_picker)
         self.page.is_picker_open = True
-        self.page.open(self.end_date_picker)
+        self.end_date_picker.open = True
+        self.page.update()
 
     def _on_picker_dismiss(self, e):
         self.page.is_picker_open = False
+        # e.control is the DatePicker that was dismissed
+        if e.control in self.page.overlay:
+            try:
+                self.page.overlay.remove(e.control)
+                self.page.update()
+            except ValueError: # It might have been removed by another event
+                pass
 
     def _on_start_date_change(self, e):
-        self.page.is_picker_open = False
         selected_date = e.control.value
         self.start_date_field.value = self._format_date(selected_date)        
         if selected_date:
@@ -1256,13 +1264,10 @@ class TaskRow(ft.Container):
                 try: self.end_date_field.update()
                 except: pass
 
-        self.start_date_picker.open = False
         self.start_date_field.update()
-        self.page.update()
         self._on_field_change()
 
     def _on_end_date_change(self, e):
-        self.page.is_picker_open = False
         selected_date = e.control.value
         self.end_date_field.value = self._format_date(selected_date)
 
@@ -1274,9 +1279,7 @@ class TaskRow(ft.Container):
                 try: self.start_date_field.update()
                 except: pass
 
-        self.end_date_picker.open = False
         self.end_date_field.update()
-        self.page.update()
         self._on_field_change()
         if hasattr(self.page, 'app_instance'):
             self.page.app_instance.check_all_due_dates()
