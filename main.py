@@ -774,13 +774,15 @@ class TaskRow(ft.Container):
 
     def _delete_checklist_item_ui(self, e):
         item_row = e.control.parent
-        item_id = item_row.data
-        if item_id:
-            db.delete_checklist_item(item_id)
-        self.checklist_col.controls.remove(item_row)
-        self._on_checklist_change()
-        try: self.update()
-        except: pass
+        # Previne o erro em caso de clique duplo, verificando se o item ainda está na lista
+        if item_row in self.checklist_col.controls:
+            item_id = item_row.data
+            if item_id:
+                db.delete_checklist_item(item_id)
+            self.checklist_col.controls.remove(item_row)
+            self._on_checklist_change()
+            try: self.update()
+            except: pass
 
     def _add_checklist_item_ui(self, e=None):
         if not self.db_id:
@@ -1277,6 +1279,7 @@ class TaskRow(ft.Container):
                 pass
 
     def _on_start_date_change(self, e):
+        self.page.is_picker_open = False
         selected_date = e.control.value
         self.start_date_field.value = self._format_date(selected_date)        
         if selected_date:
@@ -1291,6 +1294,7 @@ class TaskRow(ft.Container):
         self._on_field_change()
 
     def _on_end_date_change(self, e):
+        self.page.is_picker_open = False
         selected_date = e.control.value
         self.end_date_field.value = self._format_date(selected_date)
 
@@ -2899,58 +2903,71 @@ def main(page: ft.Page):
 
     # --- Expandir ---
     def expand():
-        if page.is_animating: return
-        page.is_animating = True
+        if page.is_animating:
+            return
 
-        # Fade out window
-        page.window.opacity = 0
-        page.update()
-        time.sleep(0.05)
+        def animation_thread():
+            page.is_animating = True
 
-        # Change layout while invisible
-        page.window.left = base_left_large
-        page.window.width = scale_func(650)
-        page.window.height = scale_func(900)
-        page.app_container.opacity = 1
-        page.mini_icon.visible = False
-        app.apply_translucency(update_page=False) # Make sure window is not transparent
-        page.update()
+            # Fade out window
+            page.window.opacity = 0
+            page.update()
 
-        # Fade in window
-        page.window.opacity = 1
-        page.update()
-        time.sleep(0.05) # Cooldown
-        page.is_animating = False
+            # Change layout while invisible
+            page.window.left = base_left_large
+            page.window.width = scale_func(650)
+            page.window.height = scale_func(900)
+            page.app_container.opacity = 1
+            page.mini_icon.visible = False
+            app.apply_translucency(update_page=False)  # Make sure window is not transparent
+            page.update()
+
+            # Fade in window
+            page.window.opacity = 1
+            page.update()
+
+
+            page.is_animating = False
+
+        threading.Thread(target=animation_thread, daemon=True).start()
 
 
     # --- Reduzir ---
     def shrink():
-        if page.is_animating: return
-        page.is_animating = True
+        if page.is_animating:
+            return
 
-        # Close settings dialog if it's open
-        if app.settings_dialog.open:
-            app.settings_dialog.open = False
+        def animation_thread():
+            page.is_animating = True
 
-        # Fade out window
-        page.window.opacity = 0
-        page.update()
-        time.sleep(0.05)
+            # Close settings dialog if it's open
+            if app.settings_dialog.open:
+                app.settings_dialog.open = False
+                page.update()
 
-        # Change layout while invisible
-        page.window.left = base_left_small
-        page.window.width = scale_func(100)
-        page.window.height = scale_func(100)
-        page.app_container.opacity = 0
-        page.mini_icon.visible = True
-        app.apply_translucency(update_page=False) # Apply translucency if enabled
-        page.update()
+            # Fade out window
+            page.window.opacity = 0
+            page.update()
 
-        # Fade in window
-        page.window.opacity = app.translucency_level / 100.0 if app.translucency_enabled else 1.0
-        page.update()
-        time.sleep(0.05) # Cooldown
-        page.is_animating = False
+
+            # Change layout while invisible
+            page.window.left = base_left_small
+            page.window.width = scale_func(100)
+            page.window.height = scale_func(100)
+            page.app_container.opacity = 0
+            page.mini_icon.visible = True
+            app.apply_translucency(update_page=False)  # Apply translucency if enabled
+            page.update()
+
+
+            # Fade in window
+            page.window.opacity = app.translucency_level / 100.0 if app.translucency_enabled else 1.0
+            page.update()
+
+
+            page.is_animating = False
+
+        threading.Thread(target=animation_thread, daemon=True).start()
 
     # --- Reduzir Inicial (sem animação) ---
     def initial_shrink():
@@ -2965,7 +2982,7 @@ def main(page: ft.Page):
     # --- Checagem do mouse ---
     def check_mouse():
         while True:
-            
+            time.sleep(0.05)  # Check 20 times per second, much more efficient
             try:
                 # Don't shrink if pinned, animating, or a picker is open
                 if page.pinned or page.is_animating or page.is_picker_open or page.is_file_picker_open:
