@@ -989,14 +989,15 @@ class TaskRow(ft.Container):
         try: self.update()
         except: pass
 
-    def _parse_date(self, date_str):
+    @staticmethod
+    def _parse_date(date_str):
         if not date_str:
             return None
         try:
             parts = date_str.split('/')
             if len(parts) != 3: return None
             day = int(parts[0]); month_name = parts[1]; year = int(parts[2])
-            month_names = {v: k for k, v in self.months.items()}
+            month_names = {v: k for k, v in TaskRow.months.items()}
             month = month_names.get(month_name)
             if not month: return None
             return datetime(year, month, day)
@@ -1004,8 +1005,8 @@ class TaskRow(ft.Container):
             return None
 
     def _validate_dates(self):
-        start_date = self._parse_date(self.start_date_field.value)
-        end_date = self._parse_date(self.end_date_field.value)
+        start_date = TaskRow._parse_date(self.start_date_field.value)
+        end_date = TaskRow._parse_date(self.end_date_field.value)
         if not start_date or not end_date:
             self._clear_date_error(); return True
         if start_date > end_date:
@@ -1045,6 +1046,28 @@ class TaskRow(ft.Container):
             self.auto_save_timer.start()
 
     def _on_status_dropdown_change(self, e=None):
+        if self.status_field.value == "Complete":
+            completion_date = datetime.now()
+            completion_date_str = self._format_date(completion_date)
+            self.end_date_field.value = completion_date_str
+
+            # A task cannot be completed before its start date.
+            # If the start date is in the future or invalid, set it to the completion date as well.
+            current_start_date = TaskRow._parse_date(self.start_date_field.value)
+            if not current_start_date or current_start_date > completion_date:
+                self.start_date_field.value = completion_date_str
+                try: self.start_date_field.update()
+                except: pass
+
+            try: self.end_date_field.update()
+            except: pass
+
+            if self.db_id:
+
+                self._on_status_change() 
+                self.save()
+                return
+
         self._on_status_change()
         self._on_field_change()
         if hasattr(self.page, 'app_instance'):
@@ -1218,7 +1241,7 @@ class TaskRow(ft.Container):
         return f"{day:02d}/{month}/{year}"
 
     def _open_start_date_picker(self, e):
-        end_date = self._parse_date(self.end_date_field.value)
+        end_date = TaskRow._parse_date(self.end_date_field.value)
         if end_date:
             self.start_date_picker.last_date = end_date
         else:
@@ -1231,7 +1254,7 @@ class TaskRow(ft.Container):
         self.page.update()
 
     def _open_end_date_picker(self, e):
-        start_date = self._parse_date(self.start_date_field.value)
+        start_date = TaskRow._parse_date(self.start_date_field.value)
         if start_date:
             self.end_date_picker.first_date = start_date
         else:
@@ -1258,7 +1281,7 @@ class TaskRow(ft.Container):
         self.start_date_field.value = self._format_date(selected_date)        
         if selected_date:
             self.end_date_picker.first_date = selected_date
-            current_end_date = self._parse_date(self.end_date_field.value)
+            current_end_date = TaskRow._parse_date(self.end_date_field.value)
             if current_end_date and current_end_date < selected_date:
                 self.end_date_field.value = ""
                 try: self.end_date_field.update()
@@ -1273,7 +1296,7 @@ class TaskRow(ft.Container):
 
         if selected_date:
             self.start_date_picker.last_date = selected_date
-            current_start_date = self._parse_date(self.start_date_field.value)
+            current_start_date = TaskRow._parse_date(self.start_date_field.value)
             if current_start_date and current_start_date > selected_date:
                 self.start_date_field.value = ""
                 try: self.start_date_field.update()
@@ -1825,24 +1848,51 @@ class AgendaTab(ft.Column):
         self.overview_completion_progress = ft.ProgressBar(value=0, bar_height=self.scale_func(10), expand=True)
         self.overview_completion_percent = ft.Text("0%", weight=ft.FontWeight.BOLD)
 
-        self.total_card = self._create_stat_card("Total Tasks", self.overview_total_tasks, ft.Icons.FUNCTIONS, ft.Colors.BLUE)
-        self.ongoing_card = self._create_stat_card("Ongoing", self.overview_ongoing_tasks, ft.Icons.LOOP, ft.Colors.ORANGE)
-        self.completed_card = self._create_stat_card("Completed", self.overview_completed_tasks, ft.Icons.CHECK_CIRCLE_OUTLINE, ft.Colors.GREEN)
-        self.overdue_card = self._create_stat_card("Overdue", self.overview_overdue_tasks, ft.Icons.ERROR_OUTLINE, ft.Colors.RED)
-
+        self.selected_status_for_chart = "ongoing"
+        self.total_card = self._create_stat_card("Total Tasks", self.overview_total_tasks, ft.Icons.FUNCTIONS, ft.Colors.BLUE, lambda e: self._on_status_card_click("total"))
+        self.ongoing_card = self._create_stat_card("Ongoing", self.overview_ongoing_tasks, ft.Icons.LOOP, ft.Colors.ORANGE, lambda e: self._on_status_card_click("ongoing"))
+        self.completed_card = self._create_stat_card("Completed", self.overview_completed_tasks, ft.Icons.CHECK_CIRCLE_OUTLINE, ft.Colors.GREEN, lambda e: self._on_status_card_click("completed"))
+        self.overdue_card = self._create_stat_card("Overdue", self.overview_overdue_tasks, ft.Icons.ERROR_OUTLINE, ft.Colors.RED, lambda e: self._on_status_card_click("overdue"))
+        
+        self.chart_year_selector = ft.Dropdown(
+            on_change=self._update_chart,
+            width=self.scale_func(120),
+            text_style=ft.TextStyle(size=self.scale_func(self.base_font_size)),
+            content_padding=ft.padding.symmetric(vertical=self.scale_func(5), horizontal=self.scale_func(10)),
+            options=[ft.dropdown.Option(str(y)) for y in range(2025, 2041)],
+            value=str(datetime.now().year) if 2025 <= datetime.now().year <= 2040 else "2025"
+        )
+        self.tasks_chart = ft.LineChart(
+            tooltip_bgcolor=ft.Colors.with_opacity(0.8, ft.Colors.BLUE_GREY),
+            expand=True, height=self.scale_func(200), data_series=[],
+            border=ft.border.all(1, ft.Colors.with_opacity(0.5, ft.Colors.ON_SURFACE)),
+            horizontal_grid_lines=ft.ChartGridLines(interval=5, color=ft.Colors.with_opacity(0.2, ft.Colors.ON_SURFACE), width=1),
+            vertical_grid_lines=ft.ChartGridLines(interval=1, color=ft.Colors.with_opacity(0.2, ft.Colors.ON_SURFACE), width=1),
+            left_axis=ft.ChartAxis(labels_size=self.scale_func(10)),
+            bottom_axis=ft.ChartAxis(
+                labels=[ft.ChartAxisLabel(value=i, label=ft.Text(TaskRow.months[i+1], size=self.scale_func(10))) for i in range(12)],
+                labels_size=self.scale_func(30),
+            ),
+            min_y=0, min_x=0, max_x=11,
+        )
+        
         self.overview_content = ft.Container(
             ft.Column([
-                ft.Row([self.total_card, self.ongoing_card], spacing=self.scale_func(15)),
-                ft.Row([self.completed_card, self.overdue_card], spacing=self.scale_func(15)),
+                ft.Row([
+                    self.total_card, self.ongoing_card, self.completed_card, self.overdue_card
+                ], spacing=self.scale_func(15), alignment=ft.MainAxisAlignment.SPACE_EVENLY),
                 ft.Divider(height=self.scale_func(30)),
                 ft.Text("Completion Progress", style=ft.TextThemeStyle.TITLE_MEDIUM),
                 ft.Container(
-                    content=ft.Row([
-                        self.overview_completion_progress,
-                        self.overview_completion_percent
-                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=self.scale_func(10)),
+                    content=ft.Row([self.overview_completion_progress, self.overview_completion_percent], vertical_alignment=ft.CrossAxisAlignment.CENTER, spacing=self.scale_func(10)),
                     padding=ft.padding.only(top=self.scale_func(10))
                 ),
+                ft.Divider(height=self.scale_func(30)),
+                ft.Row(
+                    [ft.Text("Activity Chart", style=ft.TextThemeStyle.TITLE_MEDIUM), ft.Container(expand=True), self.chart_year_selector],
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER
+                ),
+                self.tasks_chart,
             ], spacing=self.scale_func(15)),
             padding=self.scale_func(20),
             expand=True
@@ -1850,7 +1900,6 @@ class AgendaTab(ft.Column):
 
         self.task_to_delete = None
         self.delete_task_dialog = DeleteTaskConfirmationDialog(on_confirm=self.confirm_delete_task, on_cancel=self.cancel_delete_task, scale_func=self.scale_func)
-
         self.inner_tabs = ft.Tabs(
             tabs=[
                 ft.Tab(text="Overview", content=self.overview_content),
@@ -1879,7 +1928,7 @@ class AgendaTab(ft.Column):
 
         super().__init__(spacing=self.scale_func(12), expand=True, controls=[self.inner_tabs, self.buttons_row])
 
-    def _create_stat_card(self, title: str, value_control: ft.Control, icon: str, icon_color: str):
+    def _create_stat_card(self, title: str, value_control: ft.Control, icon: str, icon_color: str, on_click):
         value_control.text_align = ft.TextAlign.RIGHT
         return ft.Container(
             content=ft.Column(
@@ -1904,13 +1953,17 @@ class AgendaTab(ft.Column):
             padding=self.scale_func(15),
             border_radius=self.scale_func(10),
             expand=True,
-            ink=True,
-            on_click=lambda e: None,
-            height=self.scale_func(110)
+            ink=True, on_click=on_click
         )
+
+    def _on_status_card_click(self, status):
+        self.selected_status_for_chart = status
+        self._update_chart()
 
     def did_mount(self):
         self.update_theme_colors()
+        self.selected_status_for_chart = "ongoing"
+        self._update_chart()
 
     def update_theme_colors(self):
         if not self.page:
@@ -1937,6 +1990,76 @@ class AgendaTab(ft.Column):
             self.overview_content.update()
         except:
             pass
+
+    def _populate_chart_selectors(self):
+        # Agora fixa os anos de 2025 a 2040
+        self.chart_year_selector.options = [ft.dropdown.Option(str(y)) for y in range(2025, 2041)]
+        current_year = datetime.now().year
+        if 2025 <= current_year <= 2040:
+            self.chart_year_selector.value = str(current_year)
+        else:
+            self.chart_year_selector.value = "2025"
+        try:
+            self.chart_year_selector.update()
+        except:
+            pass
+
+    def _update_chart(self, e=None):
+        if not hasattr(self, 'page') or not self.page or not self.chart_year_selector.value:
+            self.tasks_chart.data_series = []
+            try: self.tasks_chart.update()
+            except: pass
+            return
+
+        selected_year = int(self.chart_year_selector.value)
+        all_tasks = self.ongoing_list.controls + self.complete_list.controls
+        now = datetime.now()
+        counts = {i: 0 for i in range(12)}
+
+        for task in all_tasks:
+            if not isinstance(task, TaskRow): continue
+            start_date = TaskRow._parse_date(task.start_date_field.value)
+            end_date = TaskRow._parse_date(task.end_date_field.value)
+            status = (task.status_field.value or '').lower()
+
+            if self.selected_status_for_chart == "total":
+                # Conta todas as tarefas criadas no mês
+                if start_date and start_date.year == selected_year:
+                    counts[start_date.month - 1] += 1
+            elif self.selected_status_for_chart == "ongoing":
+                if status == "ongoing" and start_date and start_date.year == selected_year:
+                    counts[start_date.month - 1] += 1
+            elif self.selected_status_for_chart == "completed":
+                if status == "complete" and end_date and end_date.year == selected_year:
+                    counts[end_date.month - 1] += 1
+            elif self.selected_status_for_chart == "overdue":
+                if status != "complete" and end_date and end_date.year == selected_year and end_date.replace(hour=23, minute=59) < now:
+                    counts[end_date.month - 1] += 1
+
+        max_y = max(counts.values()) if all_tasks else 0
+        top_y = 5 if max_y < 5 else (math.ceil(max_y / 5)) * 5
+        self.tasks_chart.max_y = top_y
+        self.tasks_chart.horizontal_grid_lines.interval = max(1, top_y / 5)
+        self.tasks_chart.left_axis.labels = [ft.ChartAxisLabel(value=i, label=ft.Text(str(i), size=self.scale_func(10))) for i in range(0, top_y + 1, max(1, top_y // 5))]
+        color_map = {
+            "total": ft.Colors.BLUE,
+            "ongoing": ft.Colors.ORANGE,
+            "completed": ft.Colors.GREEN,
+            "overdue": ft.Colors.RED
+        }
+        color = color_map.get(self.selected_status_for_chart, ft.Colors.BLUE)
+        self.tasks_chart.data_series = [
+            ft.LineChartData(
+                color=color,
+                stroke_width=3,
+                curved=True,
+                stroke_cap_round=True,
+                below_line_bgcolor=ft.Colors.with_opacity(0.2, color),
+                data_points=[ft.LineChartDataPoint(x=m, y=c) for m, c in counts.items()]
+            )
+        ]
+        try: self.tasks_chart.update()
+        except: pass
 
     def update_font_sizes(self):
         """Updates font sizes for this tab and all its tasks."""
@@ -2037,6 +2160,8 @@ class AgendaTab(ft.Column):
                 self.complete_list.controls.append(row)
         self.update_arrow_states()
         self.update_overview_stats()
+        self._populate_chart_selectors()
+        self._update_chart()
         try: self.update()
         except: pass
 
@@ -2059,6 +2184,8 @@ class AgendaTab(ft.Column):
 
         self.update_overview_stats()
         self.update_arrow_states()
+        self._populate_chart_selectors()
+        self._update_chart()
         # Don't auto-save duplicated tasks, let the caller handle it
         if (self.get_auto_save_setting and self.get_auto_save_setting()) and not data:
             row.save()
@@ -2067,6 +2194,8 @@ class AgendaTab(ft.Column):
             self.page.update()
         except:
             pass
+        self._populate_chart_selectors()
+        self._update_chart()
         return row
 
     def on_move_task_up(self, task_row):
@@ -2088,6 +2217,7 @@ class AgendaTab(ft.Column):
             active_list.controls.pop(current_index)
             active_list.controls.insert(new_index, task_row)
             self.update_arrow_states()
+            self._update_chart()
             try:
                 self.update()
             except:
@@ -2175,6 +2305,8 @@ class AgendaTab(ft.Column):
             self.update_overview_stats()
             try: self.update()
             except: pass
+        self._populate_chart_selectors()
+        self._update_chart()
 
     def on_delete_task(self, row):
         self.task_to_delete = row
@@ -2197,6 +2329,8 @@ class AgendaTab(ft.Column):
         self.delete_task_dialog.open = False
         self.update_overview_stats()
         self.update_arrow_states()
+        self._populate_chart_selectors()
+        self._update_chart()
         try: self.page.update()
         except: pass
 
@@ -2223,6 +2357,8 @@ class AgendaTab(ft.Column):
 
         self.update_overview_stats()
         self.update_arrow_states()
+        self._populate_chart_selectors()
+        self._update_chart()
         
         # Update both lists involved in the move
         try:
@@ -2493,7 +2629,7 @@ class AgendaApp(ft.Column):
                         continue
 
                     end_date_str = task_row.end_date_field.value
-                    if not (end_date_str and (end_date := task_row._parse_date(end_date_str))):
+                    if not (end_date_str and (end_date := TaskRow._parse_date(end_date_str))):
                         task_row.set_notification_status(None) # Reset color
                         continue
 
