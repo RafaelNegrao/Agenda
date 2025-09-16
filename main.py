@@ -1485,6 +1485,29 @@ class SettingsDialog(ft.AlertDialog):
         self.modal = True # Important for dropdowns inside tabs
         self.base_font_size = initial_font_size
 
+        # Opções de transição para o carousel
+        self.carousel_transition_options = [
+            ("Fade + Slide", "fade_slide"),
+            ("Fade + Slide (E -> D)", "fade_slide_lr"),
+            ("Slide", "slide"),
+            ("Slide (Direita -> Esquerda)", "slide_rl"),
+            ("Slide Push (E -> D)", "slide_push"),
+            ("Slide (Esquerda -> Esquerda)", "slide_ll"),
+            ("Zoom", "zoom"),
+            ("Rotate", "rotate"),
+            ("Bounce", "bounce"),
+        ]
+        # Valor inicial da transição (pode ser lido do banco/config)
+        initial_transition = db.get_setting('carousel_transition', 'fade_slide')
+        self.carousel_transition_dropdown = ft.Dropdown(
+            label="Transição do Carousel",
+            options=[ft.dropdown.Option(key=val, text=label) for label, val in self.carousel_transition_options],
+            value=initial_transition,
+            on_change=self._handle_carousel_setting_change,
+            expand=True,
+            menu_height=250
+        )
+
         self.title = ft.Text("Settings")
         self.auto_save_checkbox = ft.Checkbox(
             label="Auto save changes on tasks",
@@ -1608,6 +1631,7 @@ class SettingsDialog(ft.AlertDialog):
                 ft.Text("Carousel", weight=ft.FontWeight.BOLD),
                 self.carousel_show_progress_checkbox,
                 self.carousel_speed_dropdown,
+                self.carousel_transition_dropdown,
                 ft.Text("Visible Stats:"),
                 ft.Column([
                     self.carousel_show_total_checkbox,
@@ -1670,6 +1694,9 @@ class SettingsDialog(ft.AlertDialog):
         self.on_translucency_change()
 
     def _handle_carousel_setting_change(self, e):
+        # Salva a opção de animação escolhida no banco/config
+        if hasattr(self, 'carousel_transition_dropdown'):
+            db.set_setting('carousel_transition', self.carousel_transition_dropdown.value)
         self.on_carousel_settings_change()
 
     def close_dialog(self, e):
@@ -1685,6 +1712,7 @@ class MiniViewCarousel(ft.Container):
         self._stop_event = threading.Event()
 
         # Initialize with a placeholder content
+        # Fundo sempre totalmente transparente
         super().__init__(
             width=scale_func(110),
             height=scale_func(110),
@@ -1693,7 +1721,7 @@ class MiniViewCarousel(ft.Container):
             visible=True,
             padding=scale_func(5),
             border_radius=scale_func(10),
-            bgcolor=ft.Colors.with_opacity(0.1, ft.Colors.BLACK)
+            bgcolor=ft.Colors.TRANSPARENT
         )
 
     def _create_slide(self, tab_name_str, stats):
@@ -1738,7 +1766,15 @@ class MiniViewCarousel(ft.Container):
         )
 
     def did_mount(self):
-        """Start the carousel thread once the control is mounted on the page."""
+        """
+        Start the carousel thread once the control is mounted on the page.
+        Also, initialize animation properties here.
+        """
+        self.animate_opacity = ft.Animation(350, ft.AnimationCurve.EASE_IN_OUT)
+        self.animate_offset = ft.Animation(350, ft.AnimationCurve.EASE_IN_OUT)
+        self.animate_scale = ft.Animation(350, ft.AnimationCurve.EASE_IN_OUT)
+        if self.rotate is None: self.rotate = ft.Rotate(angle=0)
+        self.animate_rotation = ft.Animation(350, ft.AnimationCurve.EASE_IN_OUT)
         self.start_carousel()
 
     def start_carousel(self):
@@ -1755,12 +1791,8 @@ class MiniViewCarousel(ft.Container):
         while not self._stop_event.is_set():
             try:
                 if self.app and self.app.page and self.visible:
-                    # Check for run_threadsafe for compatibility with older Flet versions
-                    if hasattr(self.app.page, "run_threadsafe"):
-                        self.app.page.run_threadsafe(self.update_display)
-                    else:
-                        # Fallback for older Flet. This is not thread-safe and might be unstable.
-                        self.update_display()
+                    # This method now runs in the background and orchestrates UI updates
+                    self._perform_transition()
 
                 speed = int(db.get_setting('carousel_speed', '5'))
                 self._stop_event.wait(speed)
@@ -1768,25 +1800,21 @@ class MiniViewCarousel(ft.Container):
                 print(f"Error in MiniViewCarousel thread: {e}")
                 time.sleep(5)
 
-    def update_display(self):
-        """
-        This method runs entirely in the UI thread.
-        It safely reads data from other controls and updates its own UI.
-        """
+    def _get_next_slide_ui(self):
+        """Gathers data and creates the UI for the next slide."""
         if not self.app.tabs.tabs or not len(self.app.tabs.tabs):
-            self.content = ft.Text("No Tabs", size=self.scale_func(12))
-            try: self.update()
-            except: pass
-            return
+            return ft.Text("No Tabs", size=self.scale_func(12))
 
         num_tabs = len(self.app.tabs.tabs)
         if self.current_tab_index >= num_tabs:
             self.current_tab_index = 0
         
-        # Find the next valid AgendaTab to display
         start_index = self.current_tab_index
         agenda_tab = None
         while True:
+            if self.current_tab_index >= len(self.app.tabs.tabs):
+                self.current_tab_index = 0
+
             current_tab_control = self.app.tabs.tabs[self.current_tab_index]
             if isinstance(current_tab_control.content, AgendaTab):
                 agenda_tab = current_tab_control.content
@@ -1794,13 +1822,8 @@ class MiniViewCarousel(ft.Container):
             
             self.current_tab_index = (self.current_tab_index + 1) % num_tabs
             if self.current_tab_index == start_index:
-                # Cycled through all tabs, none are valid
-                self.content = ft.Text("No valid tabs", size=self.scale_func(12))
-                try: self.update()
-                except: pass
-                return
+                return ft.Text("No valid tabs", size=self.scale_func(12))
 
-        # --- Get stats from the AgendaTab's overview controls ---
         stats = {
             "total": agenda_tab.overview_total_tasks.value,
             "ongoing": agenda_tab.overview_ongoing_tasks.value,
@@ -1810,17 +1833,102 @@ class MiniViewCarousel(ft.Container):
         }
         tab_name_str = agenda_tab.tab_name
 
-        # Create the new slide UI and replace the content
         new_slide = self._create_slide(tab_name_str, stats)
-        self.content = new_slide
-        
-        # Move to the next index for the next cycle
         self.current_tab_index = (self.current_tab_index + 1)
+        return new_slide
 
-        try:
-            self.update()
-        except Exception:
-            pass
+    def _perform_transition(self):
+        """
+        Runs in a background thread. Gets the next slide and orchestrates the
+        animation by posting UI updates and sleeping. This replaces the old
+        `do_transition` method, fixing UI blocking issues.
+        """
+        new_slide = self._get_next_slide_ui()
+
+        def run_on_ui(action):
+            if self.page:
+                if hasattr(self.page, "run_threadsafe"):
+                    self.page.run_threadsafe(action)
+                else:
+                    # Fallback for older Flet versions. This is not thread-safe.
+                    action()
+
+        def set_and_update(opacity=None, offset=None, scale=None, rotate_angle=None, content=None):
+            def update_action():
+                if opacity is not None: self.opacity = opacity
+                if offset is not None: self.offset = offset
+                if scale is not None: self.scale = scale
+                if rotate_angle is not None: self.rotate.angle = rotate_angle
+                if content is not None: self.content = content
+                try: self.update()
+                except: pass
+            run_on_ui(update_action)
+
+        transition = db.get_setting('carousel_transition', 'fade_slide')
+        anim_duration = 0.35
+
+        # Reset state before each animation
+        set_and_update(opacity=1.0, offset=ft.Offset(0, 0), scale=1.0, rotate_angle=0.0)
+        time.sleep(0.05) # Ensure reset is rendered
+
+        if transition == 'zoom':
+            set_and_update(scale=0.3, opacity=0.0)
+            time.sleep(anim_duration)
+            set_and_update(content=new_slide, scale=0.3, opacity=0.0)
+            time.sleep(0.05)
+            set_and_update(scale=1.0, opacity=1.0)
+
+        elif transition == 'rotate':
+            set_and_update(rotate_angle=math.pi / 2, opacity=0.0)
+            time.sleep(anim_duration)
+            set_and_update(content=new_slide, rotate_angle=-math.pi / 2, opacity=0.0)
+            time.sleep(0.05)
+            set_and_update(rotate_angle=0.0, opacity=1.0)
+
+        elif transition == 'slide':
+            set_and_update(offset=ft.Offset(-1, 0), opacity=0.0)
+            time.sleep(anim_duration)
+            set_and_update(content=new_slide, offset=ft.Offset(1, 0), opacity=0.0)
+            set_and_update(offset=ft.Offset(0, 0), opacity=1.0)
+
+        elif transition == 'slide_rl':
+            set_and_update(offset=ft.Offset(1, 0), opacity=0.0) # Sai para a direita
+            time.sleep(anim_duration)
+            set_and_update(content=new_slide, offset=ft.Offset(-1, 0), opacity=0.0) 
+            set_and_update(offset=ft.Offset(0, 0), opacity=1.0)
+
+        elif transition == 'slide_push':
+            set_and_update(offset=ft.Offset(1, 0), opacity=0.0) # Sai para a direita
+            time.sleep(anim_duration)
+            set_and_update(content=new_slide, offset=ft.Offset(-1, 0), opacity=0.0) # Entra pela esquerda
+            set_and_update(offset=ft.Offset(0, 0), opacity=1.0)
+
+        elif transition == 'slide_ll':
+            set_and_update(offset=ft.Offset(-1, 0), opacity=0.0) # Sai para a esquerda
+            time.sleep(anim_duration)
+            set_and_update(content=new_slide, offset=ft.Offset(-1, 0), opacity=0.0) # Entra pela esquerda
+            set_and_update(offset=ft.Offset(0, 0), opacity=1.0)
+
+        elif transition == 'bounce':
+            set_and_update(opacity=0.0)
+            time.sleep(anim_duration)
+            set_and_update(content=new_slide, offset=ft.Offset(0, 1), opacity=0.0)
+            time.sleep(0.05)
+            set_and_update(offset=ft.Offset(0, -0.1), opacity=1.0)
+            time.sleep(anim_duration * 0.7)
+            set_and_update(offset=ft.Offset(0, 0))
+
+        elif transition == 'fade_slide_lr':
+            set_and_update(opacity=0.0, offset=ft.Offset(1, 0)) # Sai para a direita
+            time.sleep(anim_duration)
+            set_and_update(content=new_slide, opacity=0.0, offset=ft.Offset(-1, 0)) # Imediatamente posiciona e anima a entrada
+            set_and_update(opacity=1.0, offset=ft.Offset(0, 0))
+
+        else: # Default to 'fade_slide'
+            set_and_update(opacity=0.0, offset=ft.Offset(0.3, 0))
+            time.sleep(anim_duration)
+            set_and_update(content=new_slide, opacity=0.0, offset=ft.Offset(-0.3, 0)) # Imediatamente posiciona e anima a entrada
+            set_and_update(opacity=1.0, offset=ft.Offset(0, 0))
 
 # ---- AgendaTab ----
 class AgendaTab(ft.Column):
