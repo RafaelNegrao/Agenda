@@ -11,6 +11,7 @@ import random
 import sys
 import string
 import ctypes
+import asyncio
 
 APP_NAME = "Todo APP"
 VERSION = "1.1.0"
@@ -44,6 +45,130 @@ DRACULA_THEME = ft.Theme(
     ), # Remove a animação de transição de página padrão
 )
 
+def set_window_icon(page_title="TODO", icon_path="list.ico"):
+    """
+    Define o ícone da janela e da barra de tarefas usando a API do Windows.
+    """
+    try:
+        # Constantes da API do Windows
+        GWL_HICON = -14
+        WM_SETICON = 0x0080
+        ICON_SMALL = 0
+        ICON_BIG = 1
+        IMAGE_ICON = 1
+        LR_LOADFROMFILE = 0x0010
+        LR_DEFAULTSIZE = 0x0040
+        
+        # Carrega as bibliotecas necessárias
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        
+        # Encontra a janela pelo título - versões variadas para máxima compatibilidade
+        possible_titles = [
+            page_title,
+            "Todo APP",
+            "TODO",
+            "Flet",  # Título padrão do Flet
+            "main.py",  # Em modo debug
+        ]
+        
+        hwnd = 0
+        for title in possible_titles:
+            hwnd = user32.FindWindowW(None, title)
+            if hwnd != 0:
+                break
+        
+        # Se não encontrou por título exato, busca por correspondência parcial
+        if hwnd == 0:
+            def enum_window_callback(hwnd, lParam):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buffer = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buffer, length + 1)
+                    window_title = buffer.value.lower()
+                    # Busca por qualquer título que contenha nossa aplicação
+                    search_terms = ["todo", "agenda", "flet", "python"]
+                    for term in search_terms:
+                        if term in window_title:
+                            found_windows.append(hwnd)
+                            break
+                return True
+            
+            found_windows = []
+            enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            user32.EnumWindows(enum_proc(enum_window_callback), 0)
+            
+            if found_windows:
+                hwnd = found_windows[0]
+        
+        # Busca pelo ícone em diferentes localizações possíveis
+        icon_locations = [
+            icon_path,
+            os.path.join(os.path.dirname(sys.executable), icon_path) if hasattr(sys, 'frozen') else icon_path,
+            os.path.join(os.path.dirname(sys.argv[0]), icon_path),
+            os.path.join(os.getcwd(), icon_path),
+            os.path.join(os.path.dirname(__file__), icon_path) if '__file__' in globals() else icon_path
+        ]
+        
+        actual_icon_path = None
+        for path in icon_locations:
+            if os.path.exists(path):
+                actual_icon_path = path
+                break
+        
+        if hwnd != 0 and actual_icon_path:
+            # Converte o caminho para o formato Windows absoluto
+            icon_path_abs = os.path.abspath(actual_icon_path)
+            
+            # Carrega o ícone em diferentes tamanhos
+            hicon_small = user32.LoadImageW(
+                None,
+                icon_path_abs,
+                IMAGE_ICON,
+                16, 16,  # Tamanho pequeno (16x16)
+                LR_LOADFROMFILE
+            )
+            
+            hicon_big = user32.LoadImageW(
+                None,
+                icon_path_abs,
+                IMAGE_ICON,
+                32, 32,  # Tamanho grande (32x32)
+                LR_LOADFROMFILE
+            )
+            
+            if hicon_small or hicon_big:
+                if hicon_small:
+                    # Define o ícone pequeno (barra de tarefas)
+                    user32.SendMessageW(hwnd, WM_SETICON, ICON_SMALL, hicon_small)
+                    try:
+                        user32.SetClassLongPtrW(hwnd, GWL_HICON, hicon_small)
+                    except:
+                        # Fallback para sistemas 32-bit
+                        user32.SetClassLongW(hwnd, GWL_HICON, hicon_small)
+                
+                if hicon_big:
+                    # Define o ícone grande (janela)
+                    user32.SendMessageW(hwnd, WM_SETICON, ICON_BIG, hicon_big)
+                
+                # Força atualização da janela
+                user32.RedrawWindow(hwnd, None, None, 0x0001 | 0x0004)
+                
+                print(f"Ícone definido com sucesso para janela: {hwnd}")
+                return True
+            else:
+                print(f"Falha ao carregar ícone: {icon_path_abs}")
+        else:
+            if hwnd == 0:
+                print("Janela não encontrada")
+            if not actual_icon_path:
+                print(f"Ícone não encontrado nos locais: {icon_locations}")
+        
+    except Exception as e:
+        print(f"Erro ao definir ícone: {e}")
+        
+    return False
+
 def get_auto_dpi_scale(base_dpi=96):
     """
     Calculates the UI scale factor based on the screen's DPI.
@@ -75,6 +200,50 @@ def get_auto_dpi_scale(base_dpi=96):
     except Exception as e:
         print(f"Could not determine screen DPI, falling back to 1.0. Error: {e}")
         return 1.0
+
+def calculate_window_positions(scale_func, min_margin_base=600):
+    """
+    Calculates safe window positions ensuring minimum margin from screen edges.
+    The margin is also scaled by DPI to adapt to different screen configurations.
+    
+    Formula: window_left = screen_width - window_width - scaled_margin
+    This ensures that window_left + window_width + scaled_margin = screen_width
+    
+    Args:
+        scale_func: Function to scale UI elements based on DPI
+        min_margin_base: Base margin in pixels that will be scaled (default: 600)
+    
+    Returns:
+        tuple: (base_left_small, base_left_large, base_top)
+    """
+    try:
+        screen_w, screen_h = pyautogui.size()
+        
+        # Calculate window sizes (scaled)
+        small_width = scale_func(100)
+        large_width = scale_func(650)
+        
+        # Calculate scaled margin - adapts to DPI and screen size
+        scaled_margin = scale_func(min_margin_base)
+        
+        # Calculate positions ensuring scaled_margin free space after window's right edge
+        # Formula: left_position = screen_width - window_width - scaled_margin
+        base_left_small = screen_w - small_width - scaled_margin
+        base_left_large = screen_w - large_width - scaled_margin
+        
+        # Ensure positions are not negative (in case of very small screens)
+        base_left_small = max(0, base_left_small)
+        base_left_large = max(0, base_left_large)
+        
+        # Standard top position with some margin
+        base_top = 30
+        
+        return base_left_small, base_left_large, base_top
+        
+    except Exception as e:
+        print(f"Could not determine screen size for window positioning: {e}")
+        # Fallback values that should work on most screens
+        return 1000, 400, 30
 
 # ---- simple DB shim (igual ao seu) ----
 class db:
@@ -703,49 +872,62 @@ class TaskRow(ft.Container):
         self.set_minimized(not self.is_minimized, animated=True)
 
     def _on_date_field_hover(self, e, icon_button):
-        icon_button.opacity = 1 if e.data == "true" else 0
-        try:
-            icon_button.update()
-        except:
-            pass
+        opacity = 1 if e.data == "true" else 0
+        
+        if hasattr(self, 'page') and self.page and hasattr(self.page, 'app_instance') and hasattr(self.page.app_instance, 'animation_manager') and self.page.app_instance.animation_manager:
+            # Use AnimationManager para hover async
+            self.page.app_instance.animation_manager.request_play('field_hover', icon_button, duration=0.2, opacity=opacity)
+        else:
+            # Fallback para hover direto
+            icon_button.opacity = opacity
+            try:
+                icon_button.update()
+            except:
+                pass
 
     def set_minimized(self, minimized: bool, animated: bool = True):
         self.is_minimized = minimized
 
-        if animated:
-            self.expandable_content.animate_size = ft.Animation(duration=250, curve=ft.AnimationCurve.DECELERATE)
+        if animated and hasattr(self, 'page') and self.page and hasattr(self.page, 'app_instance') and hasattr(self.page.app_instance, 'animation_manager') and self.page.app_instance.animation_manager:
+            # Use AnimationManager para animações async
+            animation_name = 'task_minimize' if minimized else 'task_maximize'
+            self.page.app_instance.animation_manager.request_play(animation_name, self, duration=0.25)
         else:
-            self.expandable_content.animate_size = None
-
-        if self.is_minimized:
-            # Minimizar
-            self.expandable_content.height = 0
-            self.expandable_content.opacity = 0
-            self.minimized_info.visible = True
-            self.minimize_btn.rotate.angle = math.pi
-            self.minimize_btn.tooltip = "Maximize"
-        else:
-            # Maximizar
-            self.expandable_content.height = None
-            self.expandable_content.opacity = 1
-            self.minimized_info.visible = False
-            self.minimize_btn.rotate.angle = 0
-            self.minimize_btn.tooltip = "Minimize"
-        
-        try:
-            self.update()
-        except:
-            pass
-
-        # If we animated and opened the task, disable size animation afterwards
-        # so that content changes (typing, adding items) don't animate.
-        if animated and not self.is_minimized:
-            def remove_animation_after_delay():
-                time.sleep(0.3) # A bit longer than the animation duration
+            # Fallback para animação direta
+            if animated:
+                self.expandable_content.animate_size = ft.Animation(duration=250, curve=ft.AnimationCurve.DECELERATE)
+            else:
                 self.expandable_content.animate_size = None
-                try: self.update()
-                except: pass
-            threading.Thread(target=remove_animation_after_delay, daemon=True).start()
+
+            if self.is_minimized:
+                # Minimizar
+                self.expandable_content.height = 0
+                self.expandable_content.opacity = 0
+                self.minimized_info.visible = True
+                self.minimize_btn.rotate.angle = math.pi
+                self.minimize_btn.tooltip = "Maximize"
+            else:
+                # Maximizar
+                self.expandable_content.height = None
+                self.expandable_content.opacity = 1
+                self.minimized_info.visible = False
+                self.minimize_btn.rotate.angle = 0
+                self.minimize_btn.tooltip = "Minimize"
+            
+            try:
+                self.update()
+            except:
+                pass
+
+            # If we animated and opened the task, disable size animation afterwards
+            # so that content changes (typing, adding items) don't animate.
+            if animated and not self.is_minimized:
+                def remove_animation_after_delay():
+                    time.sleep(0.3) # A bit longer than the animation duration
+                    self.expandable_content.animate_size = None
+                    try: self.update()
+                    except: pass
+                threading.Thread(target=remove_animation_after_delay, daemon=True).start()
 
     def _create_checklist_item_row(self, item_id=None, text="", is_checked=False):
         item_row = ft.Row(
@@ -1175,7 +1357,13 @@ class TaskRow(ft.Container):
 
     def focus_and_expand(self):
         self.set_minimized(False, animated=True)
-        self.scroll_to(duration=1000, curve=ft.AnimationCurve.EASE_IN_OUT)
+        
+        if hasattr(self, 'page') and self.page and hasattr(self.page, 'app_instance') and hasattr(self.page.app_instance, 'animation_manager') and self.page.app_instance.animation_manager:
+            # Use AnimationManager para scroll async
+            self.page.app_instance.animation_manager.request_play('task_scroll_to', self, duration=1.0, curve=ft.AnimationCurve.EASE_IN_OUT)
+        else:
+            # Fallback para scroll direto
+            self.scroll_to(duration=1000, curve=ft.AnimationCurve.EASE_IN_OUT)
 
     def _get_due_color(self, days_diff):
         is_light_theme = self.page and self.page.theme_mode == ft.ThemeMode.LIGHT
@@ -1221,13 +1409,46 @@ class TaskRow(ft.Container):
         except: pass
 
     def did_mount(self):
-        self.opacity = 1 # Fade in
+        import time
+        # Controle inteligente de animação baseado em detecção de batch creation
+        should_animate = True
+        current_time = time.time()
+        
+        if hasattr(self, 'page') and self.page and hasattr(self.page, 'app_instance'):
+            app = self.page.app_instance
+            
+            # Se houve criação muito recente de task (últimos 400ms), não anima
+            if hasattr(app, '_last_add_task_time'):
+                time_diff = current_time - app._last_add_task_time
+                if time_diff < 0.4:
+                    should_animate = False
+                    
+            # Se há uma operação add_task em curso (busy), não anima
+            if hasattr(app, '_add_task_busy') and app._add_task_busy:
+                should_animate = False
+        
+        if should_animate and hasattr(self, 'page') and self.page and hasattr(self.page, 'app_instance') and hasattr(self.page.app_instance, 'animation_manager') and self.page.app_instance.animation_manager:
+            # Usa AnimationManager para fade-in async apenas se necessário
+            try:
+                self.page.app_instance.animation_manager.request_play('task_fade_in', self, duration=0.2)  # Duração reduzida
+            except:
+                # Fallback se AnimationManager falhar
+                self.opacity = 1
+        else:
+            # Sem animação para operações em lote - fade-in instantâneo
+            self.opacity = 1
+        
         if hasattr(self, 'page') and self.page:
             self.update_theme_colors()
             try:
                 self.page.overlay.append(self.file_picker)
-                self.update()  # To start the fade-in animation
-                self.page.update()
+                # Só faz update se não está em modo busy (evita updates excessivos)
+                if not (hasattr(self.page, 'app_instance') and hasattr(self.page.app_instance, '_add_task_busy') and self.page.app_instance._add_task_busy):
+                    self.update()
+                    self.page.update()
+                else:
+                    # Em modo busy, apenas update local sem page.update
+                    self.update()
             except: pass
 
     def will_unmount(self):
@@ -1618,68 +1839,175 @@ class SettingsDialog(ft.AlertDialog):
         # --- Tab Contents ---
         general_tab_content = ft.Column([self.auto_save_checkbox], spacing=20)
 
-        appearance_tab_content = ft.Column(
-            [
-                ft.Text("Display", weight=ft.FontWeight.BOLD),
-                self.dpi_dropdown,
-                ft.Divider(),
-                ft.Text("Theme & Fonts", weight=ft.FontWeight.BOLD),
-                self.theme_dropdown,
-                self.font_size_dropdown,
-            ],
-            spacing=15
+        appearance_tab_content = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("Display", weight=ft.FontWeight.BOLD, size=self.scale_func(14)),
+                    ft.Container(
+                        content=self.dpi_dropdown,
+                        margin=ft.margin.only(left=10, bottom=10)
+                    ),
+                    ft.Divider(height=1),
+                    ft.Text("Theme & Fonts", weight=ft.FontWeight.BOLD, size=self.scale_func(14)),
+                    ft.Container(
+                        content=ft.Column([
+                            self.theme_dropdown,
+                            ft.Container(height=self.scale_func(8)),  # Espaçamento responsivo
+                            self.font_size_dropdown,
+                        ], spacing=self.scale_func(8)),
+                        margin=ft.margin.only(left=10, bottom=10)
+                    ),
+                ],
+                spacing=self.scale_func(12),
+                scroll=ft.ScrollMode.AUTO,  # Permite scroll se necessário
+                expand=True
+            ),
+            padding=ft.padding.all(self.scale_func(10)),
+            expand=True
         )
 
-        mini_view_tab_content = ft.Column(
-            [
-                ft.Text("Carousel", weight=ft.FontWeight.BOLD),
-                self.carousel_show_progress_checkbox,
-                self.carousel_speed_dropdown,
-                self.carousel_transition_dropdown,
-                ft.Text("Visible Stats:"),
-                ft.Column([
-                    self.carousel_show_total_checkbox,
-                    self.carousel_show_ongoing_checkbox,
-                    self.carousel_show_completed_checkbox,
-                    self.carousel_show_overdue_checkbox,
-                ]),
-                ft.Divider(),
-                ft.Text("Appearance", weight=ft.FontWeight.BOLD),
-                self.translucency_enabled_checkbox,
-                self.translucency_slider,
-            ],
-            spacing=15
+        mini_view_tab_content = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text("Carousel", weight=ft.FontWeight.BOLD, size=self.scale_func(14)),
+                    ft.Container(
+                        content=ft.Column([
+                            self.carousel_show_progress_checkbox,
+                            ft.Container(height=self.scale_func(8)),  # Espaçamento responsivo
+                            self.carousel_speed_dropdown,
+                            ft.Container(height=self.scale_func(8)),
+                            self.carousel_transition_dropdown,
+                        ], spacing=self.scale_func(6)),
+                        margin=ft.margin.only(left=10, bottom=15)
+                    ),
+                    ft.Text("Visible Stats:", weight=ft.FontWeight.BOLD, size=self.scale_func(12)),
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                self.carousel_show_total_checkbox,
+                                self.carousel_show_ongoing_checkbox,
+                            ], spacing=self.scale_func(15)),
+                            ft.Container(height=self.scale_func(6)),
+                            ft.Row([
+                                self.carousel_show_completed_checkbox,
+                                self.carousel_show_overdue_checkbox,
+                            ], spacing=self.scale_func(15)),
+                        ], spacing=self.scale_func(8)),
+                        margin=ft.margin.only(left=10, bottom=15)
+                    ),
+                    ft.Divider(height=1),
+                    ft.Text("Appearance", weight=ft.FontWeight.BOLD, size=self.scale_func(14)),
+                    ft.Container(
+                        content=ft.Column([
+                            self.translucency_enabled_checkbox,
+                            ft.Container(height=self.scale_func(8)),
+                            ft.Container(
+                                content=self.translucency_slider,
+                                margin=ft.margin.only(left=20, right=20)  # Margem lateral para o slider
+                            ),
+                        ], spacing=self.scale_func(8)),
+                        margin=ft.margin.only(left=10, bottom=10)
+                    ),
+                ],
+                spacing=self.scale_func(12),
+                scroll=ft.ScrollMode.AUTO,  # Permite scroll se necessário
+                expand=True
+            ),
+            padding=ft.padding.all(self.scale_func(10)),
+            expand=True
         )
 
-        about_tab_content = ft.Column(
-            [
-                ft.Text(f"{APP_NAME} - {VERSION}", size=self.scale_func(16), weight=ft.FontWeight.BOLD),
-                ft.Text("A simple and effective to-do list application."),
-                ft.Divider(),
-                ft.Text(f"Data is stored locally at:", size=self.scale_func(10)),
-                ft.TextField(value=APP_DATA_DIR, read_only=True, border=ft.InputBorder.UNDERLINE, text_style=ft.TextStyle(size=self.scale_func(10))),
-            ],
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            spacing=10
+        about_tab_content = ft.Container(
+            content=ft.Column(
+                [
+                    ft.Text(f"{APP_NAME} - {VERSION}", size=self.scale_func(16), weight=ft.FontWeight.BOLD),
+                    ft.Container(height=self.scale_func(8)),
+                    ft.Text("A simple and effective to-do list application.", size=self.scale_func(12)),
+                    ft.Divider(height=1),
+                    ft.Container(height=self.scale_func(8)),
+                    ft.Text(f"Data is stored locally at:", size=self.scale_func(10), weight=ft.FontWeight.BOLD),
+                    ft.Container(height=self.scale_func(4)),
+                    ft.Container(
+                        content=ft.TextField(
+                            value=APP_DATA_DIR, 
+                            read_only=True, 
+                            border=ft.InputBorder.UNDERLINE, 
+                            text_style=ft.TextStyle(size=self.scale_func(9)),
+                            min_lines=1,
+                            max_lines=3,
+                            expand=True
+                        ),
+                        margin=ft.margin.symmetric(horizontal=self.scale_func(10))
+                    ),
+                ],
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=self.scale_func(8),
+                scroll=ft.ScrollMode.AUTO,
+                expand=True
+            ),
+            padding=ft.padding.all(self.scale_func(15)),
+            expand=True
         )
 
         # --- Main Tabs Control ---
-        self.content = ft.Tabs(
-            [
-                ft.Tab(text="General", icon=ft.Icons.TUNE, content=ft.Container(general_tab_content, padding=ft.padding.symmetric(vertical=20))),
-                ft.Tab(text="Appearance", icon=ft.Icons.PALETTE_OUTLINED, content=ft.Container(appearance_tab_content, padding=ft.padding.symmetric(vertical=20))),
-                ft.Tab(text="Mini-view", icon=ft.Icons.VIEW_COMPACT_ALT_OUTLINED, content=ft.Container(mini_view_tab_content, padding=ft.padding.symmetric(vertical=20))),
-                ft.Tab(text="About", icon=ft.Icons.INFO_OUTLINE, content=ft.Container(about_tab_content, padding=20)),
-            ],
-            expand=True,
+        self.content = ft.Container(
+            content=ft.Tabs(
+                [
+                    ft.Tab(
+                        text="General", 
+                        icon=ft.Icons.TUNE, 
+                        content=ft.Container(
+                            content=general_tab_content, 
+                            padding=ft.padding.all(self.scale_func(15)),
+                            expand=True
+                        )
+                    ),
+                    ft.Tab(
+                        text="Appearance", 
+                        icon=ft.Icons.PALETTE_OUTLINED, 
+                        content=appearance_tab_content
+                    ),
+                    ft.Tab(
+                        text="Mini-view", 
+                        icon=ft.Icons.VIEW_COMPACT_ALT_OUTLINED, 
+                        content=mini_view_tab_content
+                    ),
+                    ft.Tab(
+                        text="About", 
+                        icon=ft.Icons.INFO_OUTLINE, 
+                        content=about_tab_content
+                    ),
+                ],
+                expand=True,
+                height=self.scale_func(500),  # Altura mínima responsiva
+            ),
+            width=self.scale_func(600),  # Largura responsiva
+            height=self.scale_func(500),  # Altura responsiva
+            expand=True
         )
         self.actions = [ft.TextButton("Close", on_click=self.close_dialog)]
         self.actions_alignment = ft.MainAxisAlignment.END
 
     def update_font_sizes(self):
         """Updates font sizes for controls inside the dialog."""
-        # No longer needed as version is in About tab with standard text sizes
-        pass
+        # Atualiza tamanhos de fonte responsivos para os controles
+        try:
+            # Atualiza dropdown labels e outros elementos se necessário
+            if hasattr(self, 'dpi_dropdown'):
+                self.dpi_dropdown.text_size = self.scale_func(12)
+            if hasattr(self, 'theme_dropdown'):
+                self.theme_dropdown.text_size = self.scale_func(12)
+            if hasattr(self, 'font_size_dropdown'):
+                self.font_size_dropdown.text_size = self.scale_func(12)
+            if hasattr(self, 'carousel_speed_dropdown'):
+                self.carousel_speed_dropdown.text_size = self.scale_func(12)
+            if hasattr(self, 'carousel_transition_dropdown'):
+                self.carousel_transition_dropdown.text_size = self.scale_func(12)
+                
+            # Força atualização do layout
+            self.update()
+        except Exception:
+            pass
 
     def _handle_dpi_change(self, e):
         self.on_dpi_change(float(e.control.value))
@@ -1849,6 +2177,33 @@ class MiniViewCarousel(ft.Container):
         """
         new_slide = self._get_next_slide_ui()
 
+        # Try to use AnimationManager for all transitions
+        if self.app and hasattr(self.app, 'animation_manager') and self.app.animation_manager:
+            transition = db.get_setting('carousel_transition', 'fade_slide')
+            anim_duration = 0.35
+            
+            # Map transition names to AnimationManager methods
+            animation_map = {
+                'fade_slide': 'carousel_fade_slide',
+                'fade_slide_lr': 'carousel_fade_slide_lr', 
+                'zoom': 'carousel_zoom',
+                'rotate': 'carousel_rotate',
+                'slide': 'carousel_slide',
+                'slide_rl': 'carousel_slide_rl',
+                'slide_push': 'carousel_slide_push',
+                'slide_ll': 'carousel_slide_ll',
+                'bounce': 'carousel_bounce'
+            }
+            
+            animation_name = animation_map.get(transition, 'carousel_fade_slide')
+            
+            try:
+                self.app.animation_manager.request_play(animation_name, self, new_content=new_slide, duration=anim_duration)
+                return
+            except Exception:
+                pass
+
+        # Fallback to original animation code
         def run_on_ui(action):
             if self.page:
                 if hasattr(self.page, "run_threadsafe"):
@@ -2219,12 +2574,19 @@ class AgendaTab(ft.Column):
             self.reorder_mode_btn.icon = ft.Icons.LOCK
             self.reorder_mode_btn.tooltip = "Disable reordering (lock order)"
             self.reorder_mode_btn.icon_color = ft.Colors.AMBER
-            self.reorder_mode_btn.rotate.angle += math.pi * 2
+            new_angle = self.reorder_mode_btn.rotate.angle + math.pi * 2
         else:
             self.reorder_mode_btn.icon = ft.Icons.SWAP_VERT
             self.reorder_mode_btn.tooltip = "Enable reordering"
             self.reorder_mode_btn.icon_color = None
-            self.reorder_mode_btn.rotate.angle -= math.pi * 2
+            new_angle = self.reorder_mode_btn.rotate.angle - math.pi * 2
+
+        # Use AnimationManager for button rotation
+        if hasattr(self, 'page') and self.page and hasattr(self.page, 'app_instance') and hasattr(self.page.app_instance, 'animation_manager') and self.page.app_instance.animation_manager:
+            self.page.app_instance.animation_manager.request_play('button_rotate', self.reorder_mode_btn, duration=0.4, angle=new_angle)
+        else:
+            # Fallback para rotação direta
+            self.reorder_mode_btn.rotate.angle = new_angle
 
         all_tasks = self.ongoing_list.controls + self.complete_list.controls
         for task in all_tasks:
@@ -2278,37 +2640,82 @@ class AgendaTab(ft.Column):
         except: pass
 
     def add_task(self, e=None, data=None):
-        row = TaskRow(
-            on_save=self.on_save_task,
-            on_delete=self.on_delete_task,
-            on_duplicate=self.on_duplicate_task,
-            on_move_up=self.on_move_task_up,
-            on_move_down=self.on_move_task_down,
-            get_auto_save_setting=self.get_auto_save_setting,
-            scale=self.scale_func,
-            base_font_size=self.base_font_size,
-            **(data or {})
-        )
-        row.set_reorder_mode(self.reorder_mode_active)
+        import time
+        import threading
         
-        target_list = self.ongoing_list if row.status_field.value == "Ongoing" else self.complete_list
-        target_list.controls.insert(0, row)
-
-        self.update_overview_stats()
-        self.update_arrow_states()
-        self._populate_chart_selectors()
-        self._update_chart()
-        # Don't auto-save duplicated tasks, let the caller handle it
-        if (self.get_auto_save_setting and self.get_auto_save_setting()) and not data:
-            row.save()
-        # Update the entire tab to ensure the new row is rendered.
+        # Proteção contra execuções simultâneas
+        if not hasattr(self, '_add_task_busy'):
+            self._add_task_busy = False
+            
+        if self._add_task_busy:
+            return None
+            
+        # Throttling mais rigoroso: previne múltiplos cliques rápidos
+        current_time = time.time()
+        if hasattr(self, '_last_add_task_time'):
+            time_diff = current_time - self._last_add_task_time
+            if time_diff < 0.5:  # Aumentado de 300ms para 500ms
+                return None
+                
+        # Cancela debounce anterior se existir
+        if hasattr(self, '_add_task_debounce_timer'):
+            if self._add_task_debounce_timer and self._add_task_debounce_timer.is_alive():
+                return None  # Ignora cliques durante debounce
+        
+        # Marca como busy
+        self._add_task_busy = True
+        self._last_add_task_time = current_time
+        
         try:
-            self.page.update()
-        except:
-            pass
-        self._populate_chart_selectors()
-        self._update_chart()
-        return row
+            # Cria task com controle mais restrito
+            row = TaskRow(
+                on_save=self.on_save_task,
+                on_delete=self.on_delete_task,
+                on_duplicate=self.on_duplicate_task,
+                on_move_up=self.on_move_task_up,
+                on_move_down=self.on_move_task_down,
+                get_auto_save_setting=self.get_auto_save_setting,
+                scale=self.scale_func,
+                base_font_size=self.base_font_size,
+                **(data or {})
+            )
+            row.set_reorder_mode(self.reorder_mode_active)
+            
+            target_list = self.ongoing_list if row.status_field.value == "Ongoing" else self.complete_list
+            target_list.controls.insert(0, row)
+
+            self.update_overview_stats()
+            self.update_arrow_states()
+            self._populate_chart_selectors()
+            self._update_chart()
+            
+            # Auto-save apenas se não for duplicação
+            if (self.get_auto_save_setting and self.get_auto_save_setting()) and not data:
+                row.save()
+            
+            # Debounce para page.update com cancelamento de timer anterior
+            def debounced_update():
+                time.sleep(0.2)  # 200ms debounce
+                try:
+                    self.page.update()
+                except:
+                    pass
+                finally:
+                    self._add_task_busy = False  # Libera busy flag após update
+                    
+            # Cancela timer anterior e cria novo
+            if hasattr(self, '_add_task_debounce_timer') and self._add_task_debounce_timer and self._add_task_debounce_timer.is_alive():
+                # Timer anterior ainda rodando, será cancelado automaticamente
+                pass
+                
+            self._add_task_debounce_timer = threading.Timer(0.2, debounced_update)
+            self._add_task_debounce_timer.start()
+            
+            return row
+            
+        except Exception as ex:
+            self._add_task_busy = False  # Libera busy em caso de erro
+            return None
 
     def on_move_task_up(self, task_row):
         self._move_task(task_row, -1)
@@ -2348,11 +2755,26 @@ class AgendaTab(ft.Column):
                         pass
 
     def on_duplicate_task(self, original_task_row):
+        import time
+        
+        # Throttling para duplicação: previne múltiplos cliques rápidos
+        current_time = time.time()
+        if hasattr(self, '_last_duplicate_time'):
+            time_diff = current_time - self._last_duplicate_time
+            if time_diff < 0.3:  # 300ms mínimo entre duplicações
+                return
+                
+        self._last_duplicate_time = current_time
+        
         data = original_task_row.get_data()
         data['title'] = f"{data.get('title', '')} (Copy)"
 
         # Create a new task row instance by reusing add_task
         new_row = self.add_task(data=data)
+        
+        # Verifica se add_task foi bem-sucedido (não foi throttled)
+        if not new_row:
+            return
 
         # Save the new task to get a db_id and persist it
         new_row.save()
@@ -2551,6 +2973,12 @@ class AgendaApp(ft.Column):
         
         self.controls = [self.header, self.tabs]
         self.apply_theme(self.theme_name)
+        # Central animation manager used across the app
+        try:
+            self.animation_manager = AnimationManager(self.page)
+        except Exception:
+            self.animation_manager = None
+
         self.start_notification_checker()
 
     def change_translucency_settings(self):
@@ -2689,7 +3117,8 @@ class AgendaApp(ft.Column):
             if isinstance(tab.content, AgendaTab):
                 tab.content.update_theme_colors()
                 for task_row in (tab.content.ongoing_list.controls + tab.content.complete_list.controls):
-                    if isinstance(task_row, TaskRow):task_row.update_theme_colors()
+                    if isinstance(task_row, TaskRow):
+                        task_row.update_theme_colors()
         self.page.update()
 
     def toggle_auto_save(self, e):
@@ -2793,27 +3222,86 @@ class AgendaApp(ft.Column):
         except: pass
 
     def _create_tab(self, tab_name):
-        db.add_tab(tab_name)
+        # Evita duplicar tab no DB se já existe (proteção extra)
+        existing_tabs = db.list_tabs()
+        if tab_name not in existing_tabs:
+            db.add_tab(tab_name)
+            
         tab_content = AgendaTab(tab_name, self.open_delete_dialog_request, self.page, self.delete_dialog, self.get_auto_save_setting, self.scale_func, self.base_font_size)
         editable_label = EditableTabLabel(tab_name, self.rename_tab, self.scale_func, self.base_font_size)
         tab = ft.Tab(content=tab_content, tab_content=editable_label)
         self.tabs.tabs.append(tab)
+        
         try:
+            # Carrega tasks de forma mais controlada
             tab_content.load_tasks()
-            self.tabs.update()
-        except: pass
+            
+            # Só faz update se não está em modo busy (evita updates excessivos durante operações em lote)
+            if not (hasattr(self, '_add_new_tab_busy') and self._add_new_tab_busy):
+                self.tabs.update()
+        except Exception:
+            pass
 
     def add_new_tab(self, e=None):
-        existing_tab_count = len(self.tabs.tabs)
-        new_tab_name = f"Tab {existing_tab_count + 1}"
-        all_names = [t.tab_content.text for t in self.tabs.tabs]
-        count = 1
-        while new_tab_name in all_names:
-            new_tab_name = f"Tab {existing_tab_count + 1 + count}"
-            count += 1
-        db.add_tab(new_tab_name)
-        self._create_tab(new_tab_name)
-        self.tabs.selected_index = len(self.tabs.tabs) - 1
+        import time
+        import threading
+        
+        # Proteção contra execuções simultâneas
+        if not hasattr(self, '_add_new_tab_busy'):
+            self._add_new_tab_busy = False
+            
+        if self._add_new_tab_busy:
+            return None
+            
+        # Throttling rigoroso: previne múltiplos cliques rápidos
+        current_time = time.time()
+        if hasattr(self, '_last_add_new_tab_time'):
+            time_diff = current_time - self._last_add_new_tab_time
+            if time_diff < 0.5:  # 500ms mínimo entre criações de tab
+                return None
+                
+        # Cancela debounce anterior se existir
+        if hasattr(self, '_add_new_tab_debounce_timer'):
+            if self._add_new_tab_debounce_timer and self._add_new_tab_debounce_timer.is_alive():
+                return None  # Ignora cliques durante debounce
+        
+        # Marca como busy
+        self._add_new_tab_busy = True
+        self._last_add_new_tab_time = current_time
+        
+        try:
+            existing_tab_count = len(self.tabs.tabs)
+            new_tab_name = f"Tab {existing_tab_count + 1}"
+            all_names = [t.tab_content.text for t in self.tabs.tabs]
+            count = 1
+            while new_tab_name in all_names:
+                new_tab_name = f"Tab {existing_tab_count + 1 + count}"
+                count += 1
+            
+            db.add_tab(new_tab_name)
+            self._create_tab(new_tab_name)
+            self.tabs.selected_index = len(self.tabs.tabs) - 1
+            
+            # Debounce para tabs.update() com cancelamento de timer anterior
+            def debounced_update():
+                time.sleep(0.2)  # 200ms debounce
+                try:
+                    self.tabs.update()
+                except:
+                    pass
+                finally:
+                    self._add_new_tab_busy = False  # Libera busy flag após update
+                    
+            # Cancela timer anterior e cria novo
+            if hasattr(self, '_add_new_tab_debounce_timer') and self._add_new_tab_debounce_timer and self._add_new_tab_debounce_timer.is_alive():
+                # Timer anterior ainda rodando, será cancelado automaticamente
+                pass
+                
+            self._add_new_tab_debounce_timer = threading.Timer(0.2, debounced_update)
+            self._add_new_tab_debounce_timer.start()
+            
+        except Exception as ex:
+            self._add_new_tab_busy = False  # Libera busy em caso de erro
 
     def rename_tab(self, old_name, new_name):
         for tab in self.tabs.tabs:
@@ -2848,6 +3336,889 @@ class AgendaApp(ft.Column):
             except: pass
 
 
+# --- Animation Manager -------------------------------------------------
+
+
+
+class AnimationManager:
+    """Central async animation manager.
+
+    Runs an asyncio event loop in a background thread so animations use
+    non-blocking `asyncio.sleep`. UI updates are dispatched to the Flet
+    `page` using `page.run_threadsafe` to ensure thread-safety.
+    """
+
+    def __init__(self, page):
+        self.page = page
+        self.loop = asyncio.new_event_loop()
+        self._active_animations = 0
+        self._max_concurrent_animations = 10  # Limite de animações simultâneas
+        self._registry = {
+            'drop_bounce_out': self._drop_bounce_out,
+            'window_expand': self._window_expand,
+            'window_shrink': self._window_shrink,
+            # Task animations
+            'task_minimize': self._task_minimize,
+            'task_maximize': self._task_maximize,
+            'task_fade_in': self._task_fade_in,
+            'task_scroll_to': self._task_scroll_to,
+            'field_hover': self._field_hover,
+            'button_rotate': self._button_rotate,
+            # Carousel transitions
+            'carousel_fade_slide': self._carousel_fade_slide,
+            'carousel_fade_slide_lr': self._carousel_fade_slide_lr,
+            'carousel_zoom': self._carousel_zoom,
+            'carousel_rotate': self._carousel_rotate,
+            'carousel_slide': self._carousel_slide,
+            'carousel_slide_rl': self._carousel_slide_rl,
+            'carousel_slide_push': self._carousel_slide_push,
+            'carousel_slide_ll': self._carousel_slide_ll,
+            'carousel_bounce': self._carousel_bounce,
+        }
+        self._thread = threading.Thread(target=self._run_loop, daemon=True)
+        self._thread.start()
+
+    def _run_loop(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_forever()
+
+    def stop(self):
+        try:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+            self._thread.join(timeout=1.0)
+        except Exception:
+            pass
+
+    def request_play(self, name, target_control, new_content=None, duration=1.0, **kwargs):
+        """Schedule a named animation on the manager's loop.
+
+        This is thread-safe and can be called from background threads.
+        """
+        # Verifica limite de animações simultâneas
+        if self._active_animations >= self._max_concurrent_animations:
+            # Se está no limite, executa swap instantâneo sem animação
+            def _instant_swap():
+                try:
+                    if new_content is not None:
+                        target_control.content = new_content
+                    # Para animações de task, define valores finais
+                    if name == 'task_fade_in':
+                        target_control.opacity = 1
+                    elif name in ['task_minimize', 'task_maximize']:
+                        is_minimized = name == 'task_minimize'
+                        if hasattr(target_control, 'expandable_content'):
+                            target_control.expandable_content.height = 0 if is_minimized else None
+                            target_control.expandable_content.opacity = 0 if is_minimized else 1
+                        if hasattr(target_control, 'minimized_info'):
+                            target_control.minimized_info.visible = is_minimized
+                    target_control.update()
+                except Exception:
+                    pass
+            
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(_instant_swap)
+                else:
+                    _instant_swap()
+            except Exception:
+                pass
+            return None
+        
+        coro_factory = self._registry.get(name)
+        if not coro_factory:
+            # unknown animation: perform an instant swap on UI thread
+            def _swap():
+                try:
+                    if new_content is not None:
+                        target_control.content = new_content
+                        target_control.update()
+                except Exception:
+                    pass
+            
+            # Use safe update method
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(_swap)
+                else:
+                    _swap()
+            except Exception:
+                pass
+            return None
+
+        # Wrapper que incrementa/decrementa contador de animações
+        async def animation_wrapper():
+            self._active_animations += 1
+            try:
+                await coro_factory(target_control, new_content, duration, **kwargs)
+            finally:
+                self._active_animations -= 1
+
+        coro = animation_wrapper()
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        return future
+
+    async def _drop_bounce_out(self, target, new_content, duration=1.0, **kwargs):
+        """Drop from above, bounce 3x, stabilize, then exit down.
+
+        All UI mutations are dispatched via safe update method.
+        """
+        total = max(0.6, float(duration))
+        fall_time = total * 0.35
+        bounce_time = total * 0.45
+        exit_time = total * 0.20
+
+        def _set_props(opacity=None, offset=None, scale=None, rotate=None):
+            try:
+                if opacity is not None:
+                    target.opacity = opacity
+                if offset is not None:
+                    target.offset = offset
+                if scale is not None:
+                    target.scale = scale
+                if rotate is not None:
+                    target.rotate = rotate
+                target.update()
+            except Exception:
+                pass
+
+        # Use fallback method for UI updates (compatible with older Flet)
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    # Fallback: call directly (may not be thread-safe but works)
+                    func()
+            except Exception:
+                pass
+
+        # Start above the view, invisible
+        _safe_update(lambda: _set_props(opacity=0.0, offset=ft.Offset(0, -1.5)))
+        await asyncio.sleep(0.02)
+
+        # Falling in (becomes visible while falling)
+        steps = 6
+        for i in range(steps):
+            t = (i + 1) / steps
+            y = -1.5 + (t ** 1.8) * 1.8
+            op = min(1.0, t * 1.4)
+            _safe_update(lambda y=y, op=op: _set_props(opacity=op, offset=ft.Offset(0, y)))
+            await asyncio.sleep(fall_time / steps)
+
+        # Bounce sequence (3 decreasing bounces)
+        bounces = [0.35, -0.18, 0.08]
+        for amp in bounces:
+            steps = 5
+            for i in range(steps):
+                t = (i + 1) / steps
+                y = amp * (1 - (t - 1) ** 2)
+                _safe_update(lambda y=y: _set_props(offset=ft.Offset(0, y)))
+                await asyncio.sleep(bounce_time / (len(bounces) * steps))
+
+        # Stabilize at center
+        _safe_update(lambda: _set_props(offset=ft.Offset(0, 0), opacity=1.0))
+        await asyncio.sleep(0.06)
+
+        # Exit downwards
+        steps = 6
+        for i in range(steps):
+            t = (i + 1) / steps
+            y = t * 2.0
+            op = max(0.0, 1.0 - t * 1.2)
+            _safe_update(lambda y=y, op=op: _set_props(offset=ft.Offset(0, y), opacity=op))
+            await asyncio.sleep(exit_time / steps)
+
+        # Final swap of content on UI thread
+        def _swap():
+            try:
+                if new_content is not None:
+                    target.content = new_content
+                target.offset = ft.Offset(0, 0)
+                target.opacity = 1.0
+                target.scale = 1.0
+                target.rotate = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_swap)
+
+    async def _window_expand(self, target, new_content=None, duration=1.0, **kwargs):
+        """Anima a expansão da janela usando propriedades nativas do Flet.
+        
+        Mantém a posição fixa e anima apenas width/height de forma suave.
+        """
+        scale_func = kwargs.get('scale_func', lambda x: x)
+
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        # Configurar a animação nativa
+        def _animate_expand():
+            try:
+                # Tamanhos finais
+                final_width = scale_func(650)
+                final_height = scale_func(900)
+                
+                # Manter posição atual
+                current_left = self.page.window.left
+                current_top = self.page.window.top
+                
+                # Preparar conteúdo
+                self.page.app_container.opacity = 1
+                self.page.mini_icon.visible = False
+                
+                # Definir tamanhos finais (Flet vai animar automaticamente)
+                self.page.window.left = current_left
+                self.page.window.top = current_top  
+                self.page.window.width = final_width
+                self.page.window.height = final_height
+                
+                # Configurações finais
+                self.page.window.bgcolor = None
+                self.page.window.opacity = 1.0
+                
+                self.page.update()
+                
+            except Exception:
+                pass
+        
+        _safe_update(_animate_expand)
+        
+        # Aguardar a duração da animação
+        await asyncio.sleep(duration)
+
+    async def _window_shrink(self, target, new_content=None, duration=1.0, **kwargs):
+        """Anima a redução da janela usando propriedades nativas do Flet.
+        
+        Mantém a posição e anima apenas width/height de forma suave.
+        """
+        base_left_small = kwargs.get('base_left_small', 1000)
+        scale_func = kwargs.get('scale_func', lambda x: x)
+        app_instance = kwargs.get('app_instance')
+        
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        # Fechar dialog de configurações se estiver aberto
+        def _close_settings_and_animate():
+            try:
+                if app_instance and hasattr(app_instance, 'settings_dialog') and app_instance.settings_dialog.open:
+                    app_instance.settings_dialog.open = False
+
+                # Tamanhos finais (mini)
+                final_width = scale_func(100)
+                final_height = scale_func(100)
+                
+                # Preparar conteúdo
+                self.page.app_container.opacity = 0
+                self.page.mini_icon.visible = True
+                
+                # Definir tamanhos finais e posição (Flet anima automaticamente)
+                self.page.window.left = base_left_small
+                self.page.window.width = final_width
+                self.page.window.height = final_height
+                
+                # Aplicar translucência
+                if app_instance:
+                    app_instance.apply_translucency(update_page=False)
+                    final_opacity = (app_instance.translucency_level / 100.0 
+                                   if app_instance.translucency_enabled else 1.0)
+                    self.page.window.opacity = final_opacity
+                else:
+                    self.page.window.opacity = 1.0
+                
+                self.page.update()
+                
+            except Exception:
+                pass
+        
+        _safe_update(_close_settings_and_animate)
+        
+        # Aguardar a duração da animação
+        await asyncio.sleep(duration)
+
+    # --- Task Animation Methods ---
+
+    async def _task_minimize(self, target, new_content=None, duration=0.25, **kwargs):
+        """Anima a minimização de uma tarefa com altura e opacidade."""
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        def _animate():
+            try:
+                if hasattr(target, 'expandable_content'):
+                    target.expandable_content.animate_size = ft.Animation(duration=int(duration * 1000), curve=ft.AnimationCurve.DECELERATE)
+                    target.expandable_content.height = 0
+                    target.expandable_content.opacity = 0
+                    if hasattr(target, 'minimized_info'):
+                        target.minimized_info.visible = True
+                    if hasattr(target, 'minimize_btn') and hasattr(target.minimize_btn, 'rotate'):
+                        target.minimize_btn.rotate.angle = math.pi
+                        target.minimize_btn.tooltip = "Maximize"
+                    target.update()
+            except Exception:
+                pass
+
+        _safe_update(_animate)
+        await asyncio.sleep(duration)
+
+        # Remove animation after completion
+        def _cleanup():
+            try:
+                if hasattr(target, 'expandable_content'):
+                    target.expandable_content.animate_size = None
+                    target.update()
+            except Exception:
+                pass
+        
+        _safe_update(_cleanup)
+
+    async def _task_maximize(self, target, new_content=None, duration=0.25, **kwargs):
+        """Anima a maximização de uma tarefa com altura e opacidade."""
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        def _animate():
+            try:
+                if hasattr(target, 'expandable_content'):
+                    target.expandable_content.animate_size = ft.Animation(duration=int(duration * 1000), curve=ft.AnimationCurve.DECELERATE)
+                    target.expandable_content.height = None
+                    target.expandable_content.opacity = 1
+                    if hasattr(target, 'minimized_info'):
+                        target.minimized_info.visible = False
+                    if hasattr(target, 'minimize_btn') and hasattr(target.minimize_btn, 'rotate'):
+                        target.minimize_btn.rotate.angle = 0
+                        target.minimize_btn.tooltip = "Minimize"
+                    target.update()
+            except Exception:
+                pass
+
+        _safe_update(_animate)
+        await asyncio.sleep(duration)
+
+        # Remove animation after completion
+        def _cleanup():
+            try:
+                if hasattr(target, 'expandable_content'):
+                    target.expandable_content.animate_size = None
+                    target.update()
+            except Exception:
+                pass
+        
+        _safe_update(_cleanup)
+
+    async def _task_fade_in(self, target, new_content=None, duration=0.3, **kwargs):
+        """Anima o fade-in de uma tarefa de forma otimizada."""
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        def _start_fade():
+            try:
+                target.opacity = 0
+                target.update()
+            except Exception:
+                pass
+
+        def _finish_fade():
+            try:
+                target.opacity = 1
+                target.update()
+            except Exception:
+                pass
+
+        # Animação mais rápida e eficiente para fade-in
+        _safe_update(_start_fade)
+        await asyncio.sleep(0.01)  # Reduzido de 0.02 para 0.01
+        _safe_update(_finish_fade)
+        await asyncio.sleep(duration * 0.5)  # Reduzir tempo de espera total
+
+    async def _task_scroll_to(self, target, new_content=None, duration=1.0, **kwargs):
+        """Anima o scroll para uma tarefa específica."""
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        def _scroll():
+            try:
+                curve = kwargs.get('curve', ft.AnimationCurve.EASE_IN_OUT)
+                target.scroll_to(duration=int(duration * 1000), curve=curve)
+            except Exception:
+                pass
+
+        _safe_update(_scroll)
+        await asyncio.sleep(duration)
+
+    async def _field_hover(self, target, new_content=None, duration=0.2, **kwargs):
+        """Anima o hover de campos com opacidade."""
+        opacity = kwargs.get('opacity', 1.0)
+        
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        def _animate():
+            try:
+                target.opacity = opacity
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_animate)
+        await asyncio.sleep(duration)
+
+    async def _button_rotate(self, target, new_content=None, duration=0.4, **kwargs):
+        """Anima a rotação de botões."""
+        angle = kwargs.get('angle', math.pi)
+        
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        def _animate():
+            try:
+                if hasattr(target, 'rotate'):
+                    target.rotate.angle = angle
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_animate)
+        await asyncio.sleep(duration)
+
+    # --- Carousel Animation Methods ---
+
+    async def _carousel_fade_slide(self, target, new_content, duration=0.35, **kwargs):
+        """Animação fade + slide padrão do carousel."""
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        # Exit animation
+        def _exit():
+            try:
+                target.opacity = 0.0
+                target.offset = ft.Offset(0.3, 0)
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_exit)
+        await asyncio.sleep(duration)
+
+        # Swap content and enter animation
+        def _enter():
+            try:
+                target.content = new_content
+                target.offset = ft.Offset(-0.3, 0)
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_enter)
+        await asyncio.sleep(0.05)
+
+        # Final position
+        def _final():
+            try:
+                target.opacity = 1.0
+                target.offset = ft.Offset(0, 0)
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_final)
+
+    async def _carousel_fade_slide_lr(self, target, new_content, duration=0.35, **kwargs):
+        """Animação fade + slide da esquerda para direita."""
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        # Exit to right
+        def _exit():
+            try:
+                target.opacity = 0.0
+                target.offset = ft.Offset(1, 0)
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_exit)
+        await asyncio.sleep(duration)
+
+        # Enter from left
+        def _enter():
+            try:
+                target.content = new_content
+                target.opacity = 0.0
+                target.offset = ft.Offset(-1, 0)
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_enter)
+        await asyncio.sleep(0.05)
+
+        def _final():
+            try:
+                target.opacity = 1.0
+                target.offset = ft.Offset(0, 0)
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_final)
+
+    async def _carousel_zoom(self, target, new_content, duration=0.35, **kwargs):
+        """Animação de zoom do carousel."""
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        # Zoom out
+        def _zoom_out():
+            try:
+                target.scale = 0.3
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_zoom_out)
+        await asyncio.sleep(duration)
+
+        # Swap content
+        def _swap():
+            try:
+                target.content = new_content
+                target.scale = 0.3
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_swap)
+        await asyncio.sleep(0.05)
+
+        # Zoom in
+        def _zoom_in():
+            try:
+                target.scale = 1.0
+                target.opacity = 1.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_zoom_in)
+
+    async def _carousel_rotate(self, target, new_content, duration=0.35, **kwargs):
+        """Animação de rotação do carousel."""
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        # Rotate out
+        def _rotate_out():
+            try:
+                target.rotate.angle = math.pi / 2
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_rotate_out)
+        await asyncio.sleep(duration)
+
+        # Swap content
+        def _swap():
+            try:
+                target.content = new_content
+                target.rotate.angle = -math.pi / 2
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_swap)
+        await asyncio.sleep(0.05)
+
+        # Rotate in
+        def _rotate_in():
+            try:
+                target.rotate.angle = 0.0
+                target.opacity = 1.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_rotate_in)
+
+    async def _carousel_slide(self, target, new_content, duration=0.35, **kwargs):
+        """Animação de slide básico do carousel."""
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        # Slide out left
+        def _slide_out():
+            try:
+                target.offset = ft.Offset(-1, 0)
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_slide_out)
+        await asyncio.sleep(duration)
+
+        # Swap and slide in from right
+        def _slide_in():
+            try:
+                target.content = new_content
+                target.offset = ft.Offset(1, 0)
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_slide_in)
+        await asyncio.sleep(0.05)
+
+        def _final():
+            try:
+                target.offset = ft.Offset(0, 0)
+                target.opacity = 1.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_final)
+
+    async def _carousel_slide_rl(self, target, new_content, duration=0.35, **kwargs):
+        """Animação de slide da direita para esquerda."""
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        # Slide out right
+        def _slide_out():
+            try:
+                target.offset = ft.Offset(1, 0)
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_slide_out)
+        await asyncio.sleep(duration)
+
+        # Slide in from left
+        def _slide_in():
+            try:
+                target.content = new_content
+                target.offset = ft.Offset(-1, 0)
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_slide_in)
+        await asyncio.sleep(0.05)
+
+        def _final():
+            try:
+                target.offset = ft.Offset(0, 0)
+                target.opacity = 1.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_final)
+
+    async def _carousel_slide_push(self, target, new_content, duration=0.35, **kwargs):
+        """Animação de push slide."""
+        await self._carousel_slide_rl(target, new_content, duration, **kwargs)
+
+    async def _carousel_slide_ll(self, target, new_content, duration=0.35, **kwargs):
+        """Animação de slide duplo à esquerda."""
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        # Slide out left
+        def _slide_out():
+            try:
+                target.offset = ft.Offset(-1, 0)
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_slide_out)
+        await asyncio.sleep(duration)
+
+        # Slide in from left
+        def _slide_in():
+            try:
+                target.content = new_content
+                target.offset = ft.Offset(-1, 0)
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_slide_in)
+        await asyncio.sleep(0.05)
+
+        def _final():
+            try:
+                target.offset = ft.Offset(0, 0)
+                target.opacity = 1.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_final)
+
+    async def _carousel_bounce(self, target, new_content, duration=0.35, **kwargs):
+        """Animação de bounce do carousel."""
+        def _safe_update(func):
+            try:
+                if hasattr(self.page, 'run_threadsafe'):
+                    self.page.run_threadsafe(func)
+                else:
+                    func()
+            except Exception:
+                pass
+
+        # Fade out
+        def _fade_out():
+            try:
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_fade_out)
+        await asyncio.sleep(duration)
+
+        # Swap content and start bounce
+        def _bounce_start():
+            try:
+                target.content = new_content
+                target.offset = ft.Offset(0, 1)
+                target.opacity = 0.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_bounce_start)
+        await asyncio.sleep(0.05)
+
+        # Bounce up
+        def _bounce_up():
+            try:
+                target.offset = ft.Offset(0, -0.1)
+                target.opacity = 1.0
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_bounce_up)
+        await asyncio.sleep(duration * 0.7)
+
+        # Settle
+        def _settle():
+            try:
+                target.offset = ft.Offset(0, 0)
+                target.update()
+            except Exception:
+                pass
+
+        _safe_update(_settle)
+
 
 def main(page: ft.Page):
     page.title = "Todo APP"
@@ -2865,18 +4236,14 @@ def main(page: ft.Page):
     page.window.height = scale_func(100)
 
     # --- Posição base da janela ---
-    try:
-        screen_w, _ = pyautogui.size()
-        base_left_small = screen_w - scale_func(100) - 50
-        base_left_large = screen_w - scale_func(650) - 10
-        base_top = 30
-    except:
-        base_left_small = 1000
-        base_left_large = 400
-        base_top = 30
+    base_left_small, base_left_large, base_top = calculate_window_positions(scale_func)
 
     page.window.left = base_left_small
     page.window.top = base_top
+    
+    # Habilitar animações nativas na janela
+    page.window.animate_size = ft.Animation(duration=500, curve=ft.AnimationCurve.EASE_OUT)
+    page.window.animate_position = ft.Animation(duration=500, curve=ft.AnimationCurve.EASE_OUT)
 
     # --- Containers principais ---
     page.app_container = ft.Container(
@@ -2906,68 +4273,129 @@ def main(page: ft.Page):
         if page.is_animating:
             return
 
-        def animation_thread():
-            page.is_animating = True
+        page.is_animating = True
+        
+        # Use AnimationManager if available
+        if hasattr(app, 'animation_manager') and app.animation_manager:
+            def _on_complete():
+                page.is_animating = False
+            
+            try:
+                future = app.animation_manager.request_play(
+                    'window_expand',
+                    target_control=None,  # Not used for window animations
+                    duration=0.3,
+                    base_left_large=base_left_large,
+                    scale_func=scale_func
+                )
+                # Schedule completion callback
+                if future:
+                    def _wait_complete():
+                        try:
+                            future.result(timeout=2.0)
+                        except Exception:
+                            pass
+                        finally:
+                            _on_complete()
+                    threading.Thread(target=_wait_complete, daemon=True).start()
+                else:
+                    _on_complete()
+            except Exception:
+                # Fallback to original animation
+                _expand_fallback()
+        else:
+            # Fallback to original animation
+            _expand_fallback()
 
-            # Fade out window
-            page.window.opacity = 0
-            page.update()
-
-            # Change layout while invisible
-            page.window.left = base_left_large
-            page.window.width = scale_func(650)
-            page.window.height = scale_func(900)
-            page.app_container.opacity = 1
-            page.mini_icon.visible = False
-            app.apply_translucency(update_page=False)  # Make sure window is not transparent
-            page.update()
-
-            # Fade in window
-            page.window.opacity = 1
-            page.update()
-
-
+    async def _expand_fallback():
+        # Usar as animações nativas da janela em vez de fade/change/fade
+        # As animações de tamanho e posição já estão configuradas com 800ms e EASE_IN_OUT_CUBIC
+        
+        # Configurar conteúdo imediatamente
+        page.app_container.opacity = 1
+        page.mini_icon.visible = False
+        app.apply_translucency(update_page=False)
+        
+        # Animar posição e tamanho usando as animações nativas suaves
+        page.window.left = base_left_large
+        page.window.width = scale_func(650)
+        page.window.height = scale_func(900)
+        page.update()  # Trigger animations
+        
+        # Aguardar o fim da animação (800ms + margem)
+        def finish_animation():
+            time.sleep(0.9)  # Aguarda animação terminar
             page.is_animating = False
-
-        threading.Thread(target=animation_thread, daemon=True).start()
-
+        
+        threading.Thread(target=finish_animation, daemon=True).start()
 
     # --- Reduzir ---
     def shrink():
         if page.is_animating:
             return
 
-        def animation_thread():
-            page.is_animating = True
+        page.is_animating = True
+        
+        # Use AnimationManager if available
+        if hasattr(app, 'animation_manager') and app.animation_manager:
+            def _on_complete():
+                page.is_animating = False
+            
+            try:
+                future = app.animation_manager.request_play(
+                    'window_shrink',
+                    target_control=None,  # Not used for window animations
+                    duration=0.3,
+                    base_left_small=base_left_small,
+                    scale_func=scale_func,
+                    app_instance=app
+                )
+                # Schedule completion callback
+                if future:
+                    def _wait_complete():
+                        try:
+                            future.result(timeout=2.0)
+                        except Exception:
+                            pass
+                        finally:
+                            _on_complete()
+                    threading.Thread(target=_wait_complete, daemon=True).start()
+                else:
+                    _on_complete()
+            except Exception:
+                # Fallback to original animation
+                _shrink_fallback()
+        else:
+            # Fallback to original animation
+            _shrink_fallback()
 
-            # Close settings dialog if it's open
-            if app.settings_dialog.open:
-                app.settings_dialog.open = False
-                page.update()
-
-            # Fade out window
-            page.window.opacity = 0
+    def _shrink_fallback():
+        # Fechar dialog de configurações se estiver aberto
+        if app.settings_dialog.open:
+            app.settings_dialog.open = False
             page.update()
-
-
-            # Change layout while invisible
-            page.window.left = base_left_small
-            page.window.width = scale_func(100)
-            page.window.height = scale_func(100)
-            page.app_container.opacity = 0
-            page.mini_icon.visible = True
-            app.apply_translucency(update_page=False)  # Apply translucency if enabled
-            page.update()
-
-
-            # Fade in window
-            page.window.opacity = app.translucency_level / 100.0 if app.translucency_enabled else 1.0
-            page.update()
-
-
+            time.sleep(0.1)  # Pequena pausa para fechar dialog
+        
+        # Usar as animações nativas da janela em vez de fade/change/fade
+        # As animações de tamanho e posição já estão configuradas com 800ms e EASE_IN_OUT_CUBIC
+        
+        # Configurar conteúdo imediatamente 
+        page.app_container.opacity = 0
+        page.mini_icon.visible = True
+        app.apply_translucency(update_page=False)
+        
+        # Animar posição e tamanho usando as animações nativas suaves
+        page.window.left = base_left_small
+        page.window.width = scale_func(100)
+        page.window.height = scale_func(100)
+        page.update()  # Trigger animations
+        
+        # Aguardar o fim da animação (800ms + margem)
+        def finish_animation():
+            time.sleep(0.9)  # Aguarda animação terminar
             page.is_animating = False
-
-        threading.Thread(target=animation_thread, daemon=True).start()
+        
+        threading.Thread(target=finish_animation, daemon=True).start()
 
     # --- Reduzir Inicial (sem animação) ---
     def initial_shrink():
@@ -2980,9 +4408,13 @@ def main(page: ft.Page):
         page.update()
 
     # --- Checagem do mouse ---
+    last_state = None  # Track last window state to prevent unnecessary toggles
+    
     def check_mouse():
+        nonlocal last_state
+        
         while True:
-            time.sleep(0.05)  # Check 20 times per second, much more efficient
+            time.sleep(0.1)  # Check 10 times per second for stability
             try:
                 # Don't shrink if pinned, animating, or a picker is open
                 if page.pinned or page.is_animating or page.is_picker_open or page.is_file_picker_open:
@@ -2994,26 +4426,38 @@ def main(page: ft.Page):
 
                 is_large_window = page.app_container.opacity == 1
                 
-                # Use a circular hitbox for the small window for better feel
+                # Add margins to prevent flickering when cursor is near edges
                 if not is_large_window:
-                    center_x = x0 + page.window.width / 2
-                    center_y = y0 + page.window.height / 2
-                    radius = page.window.width / 2
-                    inside = math.sqrt((mx - center_x)**2 + (my - center_y)**2) < radius
-                else:
+                    # For small window, use precise rectangular detection without expansion
+                    # Only expand when cursor is actually inside the small window
                     inside = x0 <= mx <= x1 and y0 <= my <= y1
+                else:
+                    # For large window, add margin to prevent immediate closing
+                    margin = 15  # 15px margin around window
+                    inside = (x0 - margin) <= mx <= (x1 + margin) and (y0 - margin) <= my <= (y1 + margin)
 
-                if inside and not is_large_window:
+                # Only trigger if state actually changed
+                current_state = 'large' if is_large_window else 'small'
+                should_expand = inside and not is_large_window
+                should_shrink = not inside and is_large_window
+                
+                if should_expand and last_state != 'expanding':
+                    last_state = 'expanding'
                     # Use run_threadsafe to prevent UI update crashes from a background thread
                     if hasattr(page, "run_threadsafe"):
                         page.run_threadsafe(expand)
                     else:
                         expand()
-                elif not inside and is_large_window:
+                elif should_shrink and last_state != 'shrinking':
+                    last_state = 'shrinking'
                     if hasattr(page, "run_threadsafe"):
                         page.run_threadsafe(shrink)
                     else:
                         shrink()
+                elif not should_expand and not should_shrink:
+                    # Reset state when no action needed
+                    if last_state in ['expanding', 'shrinking']:
+                        last_state = current_state
 
             except Exception as e:
                 print(f"Mouse check error: {e}")
@@ -3021,6 +4465,37 @@ def main(page: ft.Page):
     initial_shrink()
     page.window.visible = True
     page.update()
+    
+    # Define o ícone da janela após ela ser criada
+    def set_icon_delayed():
+        """Tenta definir o ícone com múltiplas estratégias"""
+        success = False
+        
+        # Primeira tentativa com título atual
+        for attempt in range(3):
+            time.sleep(0.5 + (attempt * 0.3))
+            if set_window_icon("Todo APP", "list.ico"):
+                success = True
+                print(f"Ícone definido com sucesso na tentativa {attempt + 1}")
+                break
+        
+        # Segunda tentativa com diferentes títulos se a primeira falhou
+        if not success:
+            titles_to_try = ["TODO", "Flet", "main.py"]
+            for title in titles_to_try:
+                time.sleep(0.5)
+                if set_window_icon(title, "list.ico"):
+                    success = True
+                    print(f"Ícone definido com título: {title}")
+                    break
+        
+        # Última tentativa após mais tempo
+        if not success:
+            time.sleep(2.0)
+            set_window_icon("Todo APP", "list.ico")
+    
+    # Executa a definição do ícone em background
+    threading.Thread(target=set_icon_delayed, daemon=True).start()
 
     threading.Thread(target=check_mouse, daemon=True).start()
 

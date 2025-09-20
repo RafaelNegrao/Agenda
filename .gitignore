@@ -1,5 +1,5 @@
 .venv
-build
+build/
 dist
 __pycache__
 TODO.spec
